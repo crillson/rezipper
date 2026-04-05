@@ -5,6 +5,7 @@ const state = {
 };
 
 const el = {
+  statusMessage: document.getElementById('statusMessage'),
   currentFile: document.getElementById('currentFile'),
   queueStats: document.getElementById('queueStats'),
   progressBar: document.getElementById('progressBar'),
@@ -12,7 +13,8 @@ const el = {
   pageInfo: document.getElementById('pageInfo'),
   logOutput: document.getElementById('logOutput'),
   searchInput: document.getElementById('searchInput'),
-  settingsForm: document.getElementById('settingsForm')
+  settingsForm: document.getElementById('settingsForm'),
+  debugScanOutput: document.getElementById('debugScanOutput')
 };
 
 async function post(url, body = {}) {
@@ -36,6 +38,17 @@ async function refreshStatus() {
   el.currentFile.textContent = s.current_file || '-';
   el.queueStats.textContent = `${s.processed_files} / ${s.total_files}`;
   el.progressBar.style.width = `${s.progress_percent}%`;
+}
+
+function setStatusMessage(msg, isError = false) {
+  el.statusMessage.textContent = msg || '-';
+  el.statusMessage.style.color = isError ? '#cc2b2b' : '';
+}
+
+async function runDebugScan() {
+  const r = await fetch('/api/debug/scan');
+  const data = await r.json();
+  el.debugScanOutput.textContent = JSON.stringify(data, null, 2);
 }
 
 async function refreshHistory() {
@@ -83,9 +96,19 @@ function connectLogs() {
   };
 }
 
-document.getElementById('startBtn').onclick = async () => { await post('/api/start'); };
+document.getElementById('startBtn').onclick = async () => {
+  const r = await post('/api/start');
+  const data = await r.json();
+  if (data.ok) {
+    setStatusMessage('Körning startad.');
+  } else {
+    setStatusMessage(data.error || 'Start misslyckades.', true);
+  }
+  await refreshStatus();
+};
 document.getElementById('pauseBtn').onclick = async () => { await post('/api/pause'); };
 document.getElementById('resumeBtn').onclick = async () => { await post('/api/resume'); };
+document.getElementById('debugScanBtn').onclick = runDebugScan;
 
 document.getElementById('searchBtn').onclick = async () => {
   state.search = el.searchInput.value.trim();
@@ -112,11 +135,13 @@ el.settingsForm.onsubmit = async (e) => {
   const fd = new FormData(el.settingsForm);
   const payload = Object.fromEntries(fd.entries());
   await post('/api/settings', payload);
+  setStatusMessage('Inställningar sparade. Kontrollera systemloggen för cron-validering.');
   await loadSettings();
 };
 
 async function init() {
   await Promise.all([refreshStatus(), refreshHistory(), loadSettings()]);
+  await runDebugScan();
   connectLogs();
   setInterval(refreshStatus, 1500);
   setInterval(refreshHistory, 8000);

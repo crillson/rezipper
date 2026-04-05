@@ -34,6 +34,7 @@ DEFAULT_TRASH_RETENTION = os.environ.get("TRASH_RETENTION", "24h")
 DEFAULT_CRON = os.environ.get("CRON_SCHEDULE", "0 0 * * *")
 DEFAULT_SCAN_SORT = "name"
 SUPPORTED_FORMATS = [".zip", ".7z", ".rar"]
+SUPPORTED_FORMATS_SET = set(SUPPORTED_FORMATS)
 
 app = Flask(__name__)
 
@@ -255,13 +256,14 @@ class RezipperService:
 
     def scan_files(self) -> List[Path]:
         sort_mode = self.db.get_setting("scan_sort", DEFAULT_SCAN_SORT)
-        files = []
-        for ext in SUPPORTED_FORMATS:
-            for p in DATA_DIR.rglob(f"*{ext}"):
-                if TRASH_DIR in p.parents:
-                    continue
-                if p.is_file():
-                    files.append(p)
+        files: List[Path] = []
+        for p in DATA_DIR.rglob("*"):
+            if not p.is_file():
+                continue
+            if TRASH_DIR in p.parents:
+                continue
+            if p.suffix.lower() in SUPPORTED_FORMATS_SET:
+                files.append(p)
         return self._sort_files(files, sort_mode)
 
     def start(self):
@@ -270,6 +272,20 @@ class RezipperService:
                 self.logger.write("INFO", "Körning ignorerad: redan aktiv.")
                 return False
             files = self.scan_files()
+            if not files:
+                self.state = State(
+                    running=False,
+                    paused=False,
+                    current_file=None,
+                    total_files=0,
+                    processed_files=0,
+                    last_run=now_iso(),
+                )
+                self.logger.write(
+                    "WARNING",
+                    "Start avbruten: inga arkiv hittades. Kontrollera /data och filändelser (.zip/.7z/.rar).",
+                )
+                return False
             self.state = State(
                 running=True,
                 paused=False,
@@ -283,6 +299,19 @@ class RezipperService:
             self.worker.start()
             self.logger.write("INFO", f"Startar optimering. {len(files)} filer i kö.")
             return True
+
+    def debug_scan(self) -> Dict:
+        files = self.scan_files()
+        examples = [str(p.relative_to(DATA_DIR)) for p in files[:25]]
+        return {
+            "data_dir": str(DATA_DIR),
+            "trash_dir": str(TRASH_DIR),
+            "scan_sort": self.db.get_setting("scan_sort", DEFAULT_SCAN_SORT),
+            "supported_formats": SUPPORTED_FORMATS,
+            "found_count": len(files),
+            "examples": examples,
+            "truncated": len(files) > len(examples),
+        }
 
     def pause(self):
         with self.lock:
@@ -572,7 +601,7 @@ def configure_scheduler():
 
     cron = db.get_setting("cron_schedule", DEFAULT_CRON)
     try:
-        trigger = CronTrigger.from_crontab(cron, timezone="UTC")
+        trigger = cron_trigger_from_expression(cron)
         scheduler.add_job(service.start, trigger, id="optimizer_cron", replace_existing=True)
         log_bus.write("INFO", f"Cron-schema laddat: {cron}")
     except Exception as exc:
@@ -621,6 +650,14 @@ def api_status():
 @app.post("/api/start")
 def api_start():
     started = service.start()
+    status = service.status()
+    if not started and status.get("total_files", 0) == 0:
+        return jsonify(
+            {
+                "ok": False,
+                "error": "Inga filer hittades att optimera i /data (.zip/.7z/.rar).",
+            }
+        )
     return jsonify({"ok": started})
 
 
@@ -678,6 +715,40 @@ def api_set_settings():
 @app.get("/api/log-stream")
 def api_log_stream():
     return Response(log_bus.stream(), mimetype="text/event-stream")
+
+
+@app.get("/api/debug/scan")
+def api_debug_scan():
+    return jsonify(service.debug_scan())
+
+
+def cron_trigger_from_expression(expr: str) -> CronTrigger:
+    raw = (expr or "").strip()
+    if not raw:
+        raise ValueError("Tomt cron-schema")
+
+    parts = raw.split()
+    if len(parts) == 5:
+        return CronTrigger.from_crontab(raw, timezone="UTC")
+
+    if len(parts) in {6, 7}:
+        normalized = ["*" if p == "?" else p for p in parts]
+        kwargs = {
+            "second": normalized[0],
+            "minute": normalized[1],
+            "hour": normalized[2],
+            "day": normalized[3],
+            "month": normalized[4],
+            "day_of_week": normalized[5],
+            "timezone": "UTC",
+        }
+        if len(normalized) == 7:
+            kwargs["year"] = normalized[6]
+        return CronTrigger(**kwargs)
+
+    raise ValueError(
+        f"Fel antal fält: {len(parts)}. Stöder 5-fälts crontab eller 6/7-fälts (Quartz-liknande)."
+    )
 
 
 def bootstrap():

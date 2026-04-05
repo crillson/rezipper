@@ -16,6 +16,10 @@
     <section class="card">
       <h2>Live status</h2>
       <div class="status-row">
+        <strong>Meddelande:</strong>
+        <span id="statusMessage">-</span>
+      </div>
+      <div class="status-row">
         <strong>Nuvarande fil:</strong>
         <span id="currentFile">-</span>
       </div>
@@ -30,7 +34,13 @@
         <button id="startBtn">Starta</button>
         <button id="pauseBtn" class="warn">Pausa</button>
         <button id="resumeBtn">Återuppta</button>
+        <button id="debugScanBtn" type="button">Debug scan</button>
       </div>
+    </section>
+
+    <section class="card">
+      <h2>Debug scan</h2>
+      <pre id="debugScanOutput" class="log"></pre>
     </section>
 
     <section class="card">
@@ -76,6 +86,7 @@
           <label>
             Cron schema
             <input name="cron_schedule" placeholder="0 0 * * *" />
+            <small>Stöd: 5-fälts crontab eller 6/7-fälts (Quartz-liknande)</small>
           </label>
           <label>
             Sortering (name/size/date)
