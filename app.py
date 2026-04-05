@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 import threading
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from email.message import EmailMessage
 from pathlib import Path
@@ -35,7 +35,9 @@ DEFAULT_CRON = os.environ.get("CRON_SCHEDULE", "0 0 * * *")
 DEFAULT_SCAN_SORT = "name"
 DEFAULT_WORK_DIR = os.environ.get("WORK_DIR", "/jobs")
 DEFAULT_COMPRESSION_THREADS = os.environ.get("COMPRESSION_THREADS", "0")
+DEFAULT_OUTPUT_FORMAT = os.environ.get("OUTPUT_FORMAT", "same")
 ALLOWED_LANGUAGES = {"en", "sv"}
+ALLOWED_OUTPUT_FORMATS = {"same", "zip", "7z", "rar"}
 SUPPORTED_FORMATS = [".zip", ".7z", ".rar"]
 SUPPORTED_FORMATS_SET = set(SUPPORTED_FORMATS)
 WHATS_NEW_PATH = Path(os.environ.get("WHATS_NEW_PATH", "/app/WHATS_NEW.md"))
@@ -109,6 +111,13 @@ class Database:
                 CREATE TABLE IF NOT EXISTS settings (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS processed_files (
+                    rel_path TEXT PRIMARY KEY,
+                    size INTEGER NOT NULL,
+                    mtime REAL NOT NULL,
+                    updated_at TEXT NOT NULL
                 );
                 """
             )
@@ -197,6 +206,33 @@ class Database:
             "pages": max((total + per_page - 1) // per_page, 1),
         }
 
+    def upsert_processed_file(self, rel_path: str, size: int, mtime: float):
+        with self.lock:
+            conn = self._connect()
+            conn.execute(
+                """
+                INSERT INTO processed_files(rel_path, size, mtime, updated_at)
+                VALUES(?, ?, ?, ?)
+                ON CONFLICT(rel_path) DO UPDATE SET
+                    size=excluded.size,
+                    mtime=excluded.mtime,
+                    updated_at=excluded.updated_at
+                """,
+                (rel_path, int(size), float(mtime), now_iso()),
+            )
+            conn.commit()
+            conn.close()
+
+    def get_processed_file(self, rel_path: str) -> Optional[Dict]:
+        with self.lock:
+            conn = self._connect()
+            row = conn.execute(
+                "SELECT rel_path, size, mtime, updated_at FROM processed_files WHERE rel_path=?",
+                (rel_path,),
+            ).fetchone()
+            conn.close()
+        return dict(row) if row else None
+
 
 class LogBus:
     def __init__(self, log_path: Path):
@@ -239,6 +275,8 @@ class State:
     running: bool = False
     paused: bool = False
     current_file: Optional[str] = None
+    current_stage: str = "idle"
+    thread_statuses: List[Dict[str, str]] = field(default_factory=list)
     total_files: int = 0
     processed_files: int = 0
     last_run: Optional[str] = None
@@ -256,6 +294,59 @@ class RezipperService:
 
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         TRASH_DIR.mkdir(parents=True, exist_ok=True)
+
+    def _format_thread_statuses(self, file_label: str, queue_activity: str, compression_activity: str) -> List[Dict[str, str]]:
+        threads = self._compression_threads()
+        thread_label = str(threads) if threads > 0 else "auto"
+        return [
+            {
+                "name": "queue-worker",
+                "activity": queue_activity,
+                "file": file_label,
+            },
+            {
+                "name": "compression-threads",
+                "activity": compression_activity,
+                "file": file_label,
+                "threads": thread_label,
+            },
+        ]
+
+    def _set_stage(self, path: Optional[Path], queue_activity: str, compression_activity: str = "idle"):
+        file_label = "-"
+        if path is not None:
+            file_label = str(path.relative_to(DATA_DIR))
+        with self.lock:
+            if path is not None:
+                self.state.current_file = file_label
+            self.state.current_stage = queue_activity
+            self.state.thread_statuses = self._format_thread_statuses(file_label, queue_activity, compression_activity)
+
+    def _normalized_output_format(self) -> str:
+        chosen = (self.db.get_setting("output_format", DEFAULT_OUTPUT_FORMAT) or DEFAULT_OUTPUT_FORMAT).strip().lower()
+        return chosen if chosen in ALLOWED_OUTPUT_FORMATS else "same"
+
+    def _target_suffix_for(self, source_suffix: str) -> str:
+        configured = self._normalized_output_format()
+        if configured == "same":
+            return source_suffix.lower()
+        return f".{configured}"
+
+    def _is_already_processed(self, path: Path) -> bool:
+        target_suffix = self._target_suffix_for(path.suffix.lower())
+        if target_suffix != path.suffix.lower():
+            # Om användaren vill konvertera format ska filen inte skippas.
+            return False
+
+        rel_path = str(path.relative_to(DATA_DIR))
+        previous = self.db.get_processed_file(rel_path)
+        if not previous:
+            return False
+
+        current = path.stat()
+        same_size = int(previous.get("size", -1)) == int(current.st_size)
+        same_mtime = abs(float(previous.get("mtime", -1.0)) - float(current.st_mtime)) < 0.001
+        return same_size and same_mtime
 
     def _sort_files(self, files: List[Path], mode: str) -> List[Path]:
         if mode == "size":
@@ -311,28 +402,38 @@ class RezipperService:
         return result
 
     def scan_files(self) -> List[Path]:
+        files, _skipped = self._scan_files_with_stats()
+        return files
+
+    def _scan_files_with_stats(self) -> tuple[List[Path], int]:
         sort_mode = self.db.get_setting("scan_sort", DEFAULT_SCAN_SORT)
         files: List[Path] = []
+        skipped_processed = 0
         for p in DATA_DIR.rglob("*"):
             if not p.is_file():
                 continue
             if TRASH_DIR in p.parents:
                 continue
             if p.suffix.lower() in SUPPORTED_FORMATS_SET:
+                if self._is_already_processed(p):
+                    skipped_processed += 1
+                    continue
                 files.append(p)
-        return self._sort_files(files, sort_mode)
+        return self._sort_files(files, sort_mode), skipped_processed
 
     def start(self):
         with self.lock:
             if self.state.running:
                 self.logger.write("INFO", "Körning ignorerad: redan aktiv.")
                 return False
-            files = self.scan_files()
+            files, skipped_processed = self._scan_files_with_stats()
             if not files:
                 self.state = State(
                     running=False,
                     paused=False,
                     current_file=None,
+                    current_stage="idle",
+                    thread_statuses=self._format_thread_statuses("-", "idle", "idle"),
                     total_files=0,
                     processed_files=0,
                     last_run=now_iso(),
@@ -346,6 +447,8 @@ class RezipperService:
                 running=True,
                 paused=False,
                 current_file=None,
+                current_stage="queued",
+                thread_statuses=self._format_thread_statuses("-", "queued", "idle"),
                 total_files=len(files),
                 processed_files=0,
                 last_run=now_iso(),
@@ -356,20 +459,24 @@ class RezipperService:
             threads = self._compression_threads()
             threads_text = str(threads) if threads > 0 else "auto"
             self.logger.write("INFO", f"Startar optimering. {len(files)} filer i kö.")
+            if skipped_processed:
+                self.logger.write("INFO", f"Skippade {skipped_processed} redan optimerade filer (oförändrade sedan senaste körning).")
             self.logger.write("INFO", f"Komprimeringstrådar: {threads_text}")
             return True
 
     def debug_scan(self) -> Dict:
-        files = self.scan_files()
+        files, skipped_processed = self._scan_files_with_stats()
         examples = [str(p.relative_to(DATA_DIR)) for p in files[:25]]
         return {
             "data_dir": str(DATA_DIR),
             "trash_dir": str(TRASH_DIR),
             "work_dir": str(self._get_work_root()),
             "compression_threads": self._compression_threads(),
+            "output_format": self._normalized_output_format(),
             "scan_sort": self.db.get_setting("scan_sort", DEFAULT_SCAN_SORT),
             "supported_formats": SUPPORTED_FORMATS,
             "found_count": len(files),
+            "skipped_processed": skipped_processed,
             "examples": examples,
             "truncated": len(files) > len(examples),
         }
@@ -401,16 +508,26 @@ class RezipperService:
             self.pause_event.wait()
             with self.lock:
                 self.state.current_file = str(file.relative_to(DATA_DIR))
+                self.state.current_stage = "queued"
+                self.state.thread_statuses = self._format_thread_statuses(
+                    self.state.current_file,
+                    "queued",
+                    "idle",
+                )
             self.logger.write("INFO", f"Bearbetar: {file.relative_to(DATA_DIR)}")
             self._process_single(file)
             with self.lock:
                 self.state.processed_files += 1
                 self.state.current_file = None
+                self.state.current_stage = "waiting"
+                self.state.thread_statuses = self._format_thread_statuses("-", "waiting", "idle")
 
         with self.lock:
             self.state.running = False
             self.state.paused = False
             self.state.current_file = None
+            self.state.current_stage = "idle"
+            self.state.thread_statuses = self._format_thread_statuses("-", "idle", "idle")
         self.logger.write("INFO", "Optimeringskön är färdig.")
 
     def _process_single(self, path: Path):
@@ -419,24 +536,37 @@ class RezipperService:
         rel_name = str(path.relative_to(DATA_DIR))
         work_dir: Optional[Path] = None
         try:
+            self._set_stage(path, "preparing", "idle")
             work_dir = self._build_work_dir(path)
             work_dir.mkdir(parents=True, exist_ok=True)
             self._debug_log(f"Arbetsmapp: {work_dir}")
-            optimized = work_dir / f"optimized{path.suffix.lower()}"
+            target_suffix = self._target_suffix_for(path.suffix.lower())
+            optimized = work_dir / f"optimized{target_suffix}"
             self._debug_log(f"Tempfil för optimering: {optimized}")
-            self._recompress(path, optimized, work_dir)
+            self._recompress(path, optimized, work_dir, target_suffix)
+
+            self._set_stage(path, "crc", "idle")
             self._crc_test(optimized)
 
+            self._set_stage(path, "replace", "idle")
             new_size = optimized.stat().st_size
+            final_path = path.with_suffix(target_suffix)
             trash_target = self._move_original_to_trash(path)
-            shutil.move(str(optimized), str(path))
+            extra_trash_target = None
+            if final_path.exists() and final_path != path:
+                extra_trash_target = self._move_original_to_trash(final_path)
+            shutil.move(str(optimized), str(final_path))
+
+            final_rel_name = str(final_path.relative_to(DATA_DIR))
+            final_stat = final_path.stat()
+            self.db.upsert_processed_file(final_rel_name, final_stat.st_size, final_stat.st_mtime)
 
             savings = original_size - new_size
             savings_percent = (savings / original_size * 100.0) if original_size else 0.0
             ratio = (original_size / new_size * 100.0) if new_size else 0.0
             self.db.insert_job(
                 {
-                    "filename": rel_name,
+                    "filename": final_rel_name,
                     "original_size": original_size,
                     "new_size": new_size,
                     "savings_bytes": savings,
@@ -448,10 +578,13 @@ class RezipperService:
                     "created_at": now_iso(),
                 }
             )
+            replaced_text = f"{rel_name} -> {final_rel_name}" if rel_name != final_rel_name else final_rel_name
+            extra_text = f", replaced old target: {extra_trash_target.name}" if extra_trash_target else ""
             self.logger.write(
                 "INFO",
-                f"Klar: {rel_name} ({original_size} -> {new_size} bytes, trash: {trash_target.name})",
+                f"Klar: {replaced_text} ({original_size} -> {new_size} bytes, trash: {trash_target.name}{extra_text})",
             )
+            self._set_stage(final_path, "completed", "idle")
         except Exception as exc:
             self.db.insert_job(
                 {
@@ -469,19 +602,22 @@ class RezipperService:
             )
             self.logger.write("ERROR", f"Fel vid {rel_name}: {exc}")
             send_critical_email(f"CRC/optimeringsfel för {rel_name}", str(exc))
+            self._set_stage(path, "failed", "idle")
         finally:
             if work_dir and work_dir.exists():
                 shutil.rmtree(work_dir, ignore_errors=True)
 
-    def _recompress(self, source: Path, target: Path, work_dir: Path):
-        archive_type = source.suffix.lower()
-        self._debug_log(f"Startar recompress för {source} ({archive_type})")
+    def _recompress(self, source: Path, target: Path, work_dir: Path, target_suffix: str):
+        source_type = source.suffix.lower()
+        target_type = target_suffix.lower()
+        self._debug_log(f"Startar recompress för {source} ({source_type} -> {target_type})")
         thread_count = self._compression_threads()
         thread_hint = f" (threads={thread_count})" if thread_count > 0 else " (threads=auto)"
         self._debug_log(f"Komprimeringsinställning{thread_hint}")
 
         # ZIP kan hanteras utan externa binärer som fallback.
-        if archive_type == ".zip" and not shutil.which("7z"):
+        if source_type == ".zip" and target_type == ".zip" and not shutil.which("7z"):
+            self._set_stage(source, "packing", "packing")
             with zipfile.ZipFile(source, "r") as zin, zipfile.ZipFile(
                 target, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9
             ) as zout:
@@ -495,33 +631,36 @@ class RezipperService:
 
         # 7z krävs för .7z/.rar samt används för .zip när tillgänglig.
         if not shutil.which("7z"):
-            raise RuntimeError("7z krävs för att optimera detta format.")
+            raise RuntimeError("7z krävs för att optimera/konvertera detta format.")
 
         extract_dir = work_dir / "extract"
         extract_dir.mkdir(parents=True, exist_ok=True)
+        self._set_stage(source, "extracting", "idle")
         extract_cmd = ["7z", "x", "-y", f"-o{extract_dir}", str(source)]
         r = self._run_command(extract_cmd)
         if r.returncode != 0:
             raise RuntimeError(f"7z extract misslyckades: {r.stderr or r.stdout}")
 
-        if archive_type in {".zip", ".7z"}:
-            target_type = "zip" if archive_type == ".zip" else "7z"
-            add_cmd = ["7z", "a", f"-t{target_type}", "-mx=9", str(target), "."]
+        if target_type in {".zip", ".7z"}:
+            self._set_stage(source, "packing", "packing")
+            cli_target_type = "zip" if target_type == ".zip" else "7z"
+            add_cmd = ["7z", "a", f"-t{cli_target_type}", "-mx=9", str(target), "."]
             if thread_count > 0:
                 add_cmd.insert(3, f"-mmt={thread_count}")
             r = self._run_command(add_cmd, cwd=extract_dir)
             if r.returncode != 0:
                 raise RuntimeError(
-                    f"7z komprimering misslyckades för {archive_type}: {r.stderr or r.stdout}"
+                    f"7z komprimering misslyckades för {target_type}: {r.stderr or r.stdout}"
                 )
             return
 
-        if archive_type == ".rar":
+        if target_type == ".rar":
             if not shutil.which("rar"):
                 raise RuntimeError(
-                    "RAR-optimering kräver 'rar'-binär för ompackning (7z kan normalt inte skapa RAR)."
+                    "RAR-konvertering kräver 'rar'-binär för ompackning (7z kan normalt inte skapa RAR)."
                 )
 
+            self._set_stage(source, "packing", "packing")
             add_cmd = ["rar", "a", "-idq", "-m5", str(target), "."]
             if thread_count > 0:
                 add_cmd.insert(3, f"-mt{thread_count}")
@@ -532,7 +671,7 @@ class RezipperService:
                 )
             return
 
-        raise RuntimeError(f"Format stöds inte: {archive_type}")
+        raise RuntimeError(f"Målformat stöds inte: {target_type}")
 
     def _crc_test(self, path: Path):
         if shutil.which("7z"):
@@ -590,6 +729,8 @@ def init_defaults():
         db.set_setting("work_dir", DEFAULT_WORK_DIR)
     if db.get_setting("compression_threads") is None:
         db.set_setting("compression_threads", DEFAULT_COMPRESSION_THREADS)
+    if db.get_setting("output_format") is None:
+        db.set_setting("output_format", DEFAULT_OUTPUT_FORMAT if DEFAULT_OUTPUT_FORMAT in ALLOWED_OUTPUT_FORMATS else "same")
     if db.get_setting("debug_logging") is None:
         db.set_setting("debug_logging", "false")
     if db.get_setting("language") is None:
@@ -774,8 +915,11 @@ def api_get_settings():
     settings.setdefault("scan_sort", DEFAULT_SCAN_SORT)
     settings.setdefault("work_dir", DEFAULT_WORK_DIR)
     settings.setdefault("compression_threads", DEFAULT_COMPRESSION_THREADS)
+    settings.setdefault("output_format", DEFAULT_OUTPUT_FORMAT if DEFAULT_OUTPUT_FORMAT in ALLOWED_OUTPUT_FORMATS else "same")
     settings.setdefault("debug_logging", "false")
     settings.setdefault("language", "en")
+    if settings.get("output_format") not in ALLOWED_OUTPUT_FORMATS:
+        settings["output_format"] = "same"
     if settings.get("language") not in ALLOWED_LANGUAGES:
         settings["language"] = "en"
     return jsonify(settings)
@@ -790,6 +934,7 @@ def api_set_settings():
         "scan_sort",
         "work_dir",
         "compression_threads",
+        "output_format",
         "debug_logging",
         "language",
         "smtp_host",
@@ -817,6 +962,10 @@ def api_set_settings():
                     raw_value = 0
                 sanitized = max(0, min(raw_value, max_threads))
                 db.set_setting("compression_threads", str(sanitized))
+                continue
+            if k == "output_format":
+                selected = str(v).strip().lower()
+                db.set_setting("output_format", selected if selected in ALLOWED_OUTPUT_FORMATS else "same")
                 continue
             if k == "debug_logging":
                 db.set_setting("debug_logging", "true" if parse_bool(str(v)) else "false")
@@ -909,7 +1058,7 @@ def read_whats_new() -> str:
             return WHATS_NEW_PATH.read_text(encoding="utf-8")
     except Exception:
         pass
-    return "# pre-release-0.6\n\nNo release notes available."
+    return "# v0.7\n\nNo release notes available."
 
 
 @app.get("/api/system-status")
@@ -934,7 +1083,7 @@ def api_system_status():
 
 @app.get("/api/whats-new")
 def api_whats_new():
-    return jsonify({"version": "pre-release-0.6", "content": read_whats_new()})
+    return jsonify({"version": "v0.7", "content": read_whats_new()})
 
 
 def cron_trigger_from_expression(expr: str) -> CronTrigger:

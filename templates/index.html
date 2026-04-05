@@ -47,8 +47,16 @@
           <span id="currentFile">-</span>
         </div>
         <div class="status-row">
+          <strong data-i18n="current_stage_label">Current stage:</strong>
+          <span id="currentStage">-</span>
+        </div>
+        <div class="status-row">
           <strong data-i18n="queue_label">Queue:</strong>
           <span id="queueStats">0 / 0</span>
+        </div>
+        <div class="status-row thread-status-wrap">
+          <strong data-i18n="thread_status_label">Thread activity:</strong>
+          <ul id="threadStatusList" class="thread-status-list"></ul>
         </div>
         <div class="progress-wrap">
           <div class="progress-bar" id="progressBar"></div>
@@ -128,6 +136,16 @@
               <small data-i18n="compression_threads_help">Limit CPU threads for 7z/rar compression</small>
             </label>
             <label>
+              <span data-i18n="output_format_label">Output format</span>
+              <select name="output_format" id="outputFormatSelect">
+                <option value="same" data-i18n="output_format_same">Same as source</option>
+                <option value="zip">ZIP (.zip)</option>
+                <option value="7z">7z (.7z)</option>
+                <option value="rar">RAR (.rar)</option>
+              </select>
+              <small data-i18n="output_format_help">Choose archive type to keep or convert to when repacking</small>
+            </label>
+            <label>
               <span data-i18n="language_label">Language</span>
               <select name="language" id="languageSelect">
                 <option value="en">English</option>
@@ -181,7 +199,7 @@
     <section id="aboutView" class="view">
       <section class="card">
         <h2 data-i18n="about_title">About</h2>
-        <p data-i18n="about_text">Rezipper pre-release-0.6. Archive optimization utility with scheduling, history and diagnostics.</p>
+        <p data-i18n="about_text">Rezipper v0.7. Archive optimization utility with scheduling, history and diagnostics.</p>
       </section>
     </section>
   </main>

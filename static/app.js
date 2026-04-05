@@ -12,7 +12,9 @@ const el = {
   views: Array.from(document.querySelectorAll('.view')),
   statusMessage: document.getElementById('statusMessage'),
   currentFile: document.getElementById('currentFile'),
+  currentStage: document.getElementById('currentStage'),
   queueStats: document.getElementById('queueStats'),
+  threadStatusList: document.getElementById('threadStatusList'),
   progressBar: document.getElementById('progressBar'),
   historyBody: document.getElementById('historyBody'),
   pageInfo: document.getElementById('pageInfo'),
@@ -112,8 +114,22 @@ async function refreshStatus() {
   const r = await fetch('/api/status');
   const s = await r.json();
   el.currentFile.textContent = s.current_file || '-';
+  const stageKey = s.current_stage ? `stage_${s.current_stage}` : '';
+  el.currentStage.textContent = stageKey ? t(stageKey, s.current_stage) : '-';
   el.queueStats.textContent = `${s.processed_files} / ${s.total_files}`;
   el.progressBar.style.width = `${s.progress_percent}%`;
+
+  el.threadStatusList.innerHTML = '';
+  const statuses = Array.isArray(s.thread_statuses) ? s.thread_statuses : [];
+  for (const item of statuses) {
+    const li = document.createElement('li');
+    const activityKey = item.activity ? `stage_${item.activity}` : '';
+    const activityText = activityKey ? t(activityKey, item.activity || '-') : (item.activity || '-');
+    const fileText = item.file || '-';
+    const suffix = item.threads ? ` (${t('threads_label', 'threads')}: ${item.threads})` : '';
+    li.textContent = `${item.name || 'worker'}: ${activityText} • ${fileText}${suffix}`;
+    el.threadStatusList.appendChild(li);
+  }
 }
 
 function setStatusMessage(msg, isError = false) {
