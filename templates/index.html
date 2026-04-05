@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ZipOptimizer Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <h1>ZipOptimizer</h1>
+    <p>Kontrollpanel för arkivoptimering</p>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2>Live status</h2>
+      <div class="status-row">
+        <strong>Nuvarande fil:</strong>
+        <span id="currentFile">-</span>
+      </div>
+      <div class="status-row">
+        <strong>Kö:</strong>
+        <span id="queueStats">0 / 0</span>
+      </div>
+      <div class="progress-wrap">
+        <div class="progress-bar" id="progressBar"></div>
+      </div>
+      <div class="actions">
+        <button id="startBtn">Starta</button>
+        <button id="pauseBtn" class="warn">Pausa</button>
+        <button id="resumeBtn">Återuppta</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Total historik</h2>
+      <div class="controls">
+        <input type="text" id="searchInput" placeholder="Sök filnamn..." />
+        <button id="searchBtn">Sök</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Filnamn</th>
+            <th>Originalstorlek</th>
+            <th>Ny storlek</th>
+            <th>Besparing (%)</th>
+            <th>Ratio</th>
+            <th>Status</th>
+            <th>Tid</th>
+          </tr>
+        </thead>
+        <tbody id="historyBody"></tbody>
+      </table>
+      <div class="pagination">
+        <button id="prevPage">Föregående</button>
+        <span id="pageInfo">Sida 1 / 1</span>
+        <button id="nextPage">Nästa</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Systemlogg (realtid)</h2>
+      <pre id="logOutput" class="log"></pre>
+    </section>
+
+    <section class="card">
+      <h2>Inställningar</h2>
+      <form id="settingsForm">
+        <div class="grid">
+          <label>
+            Papperskorg retention
+            <input name="trash_retention" placeholder="24h" />
+          </label>
+          <label>
+            Cron schema
+            <input name="cron_schedule" placeholder="0 0 * * *" />
+          </label>
+          <label>
+            Sortering (name/size/date)
+            <input name="scan_sort" placeholder="name" />
+          </label>
+          <label>
+            SMTP host
+            <input name="smtp_host" />
+          </label>
+          <label>
+            SMTP port
+            <input name="smtp_port" />
+          </label>
+          <label>
+            SMTP user
+            <input name="smtp_user" />
+          </label>
+          <label>
+            SMTP pass
+            <input name="smtp_pass" type="password" />
+          </label>
+          <label>
+            SMTP from
+            <input name="smtp_from" />
+          </label>
+          <label>
+            SMTP to
+            <input name="smtp_to" />
+          </label>
+        </div>
+        <div class="actions">
+          <button type="submit">Spara inställningar</button>
+        </div>
+      </form>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+services:
+  zipoptimizer:
+    build: .
+    container_name: zipoptimizer
+    ports:
+      - "5063:5063"
+    environment:
+      - TRASH_RETENTION=24h
+      - CRON_SCHEDULE=0 0 * * *
+      - DATA_DIR=/data
+      - CONFIG_DIR=/config
+      - PORT=5063
+    volumes:
+      - ./data:/data
+      - ./config:/config
+    restart: unless-stopped

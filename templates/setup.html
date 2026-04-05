@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Första uppstart - ZipOptimizer</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <main class="setup-wrap">
+    <section class="card setup-card">
+      <h1>Första uppstart</h1>
+      <p>Skapa användare för Basic Auth.</p>
+      <form id="setupForm">
+        <label>
+          Användarnamn
+          <input name="username" required minlength="3" />
+        </label>
+        <label>
+          Lösenord
+          <input name="password" type="password" required minlength="6" />
+        </label>
+        <div class="actions">
+          <button type="submit">Spara och fortsätt</button>
+        </div>
+        <p id="setupMsg"></p>
+      </form>
+    </section>
+  </main>
+
+  <script>
+    const form = document.getElementById('setupForm');
+    const msg = document.getElementById('setupMsg');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const payload = {
+        username: fd.get('username'),
+        password: fd.get('password')
+      };
+
+      const res = await fetch('/setup', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        msg.textContent = data.error || 'Fel vid setup';
+        msg.className = 'error';
+        return;
+      }
+      msg.textContent = 'Klart! Logga in via browserns Basic Auth prompt.';
+      msg.className = 'ok';
+      setTimeout(() => { window.location.href = '/'; }, 1200);
+    });
+  </script>
+</body>
+</html>
