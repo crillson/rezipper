@@ -1,7 +1,7 @@
 services:
-  zipoptimizer:
+  rezipper:
     build: .
-    container_name: zipoptimizer
+    container_name: rezipper
     ports:
       - "5063:5063"
     environment:

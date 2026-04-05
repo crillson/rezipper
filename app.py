@@ -233,7 +233,7 @@ class State:
     last_run: Optional[str] = None
 
 
-class ZipOptimizerService:
+class RezipperService:
     def __init__(self, db: Database, logger: LogBus):
         self.db = db
         self.logger = logger
@@ -469,7 +469,7 @@ class ZipOptimizerService:
 
 db = Database(DB_PATH)
 log_bus = LogBus(LOG_PATH)
-service = ZipOptimizerService(db, log_bus)
+service = RezipperService(db, log_bus)
 scheduler = BackgroundScheduler(timezone="UTC")
 
 

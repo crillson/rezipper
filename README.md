@@ -1,4 +1,4 @@
-# ZipOptimizer Docker (v3.0)
+# Rezipper Docker (v3.0)
 
 Docker-baserad tjänst som optimerar `.zip`, `.7z` och `.rar`-arkiv, verifierar CRC, flyttar original till `.trash`, loggar historik i SQLite och erbjuder lösenordsskyddat webbgränssnitt på port **5063**.
 
