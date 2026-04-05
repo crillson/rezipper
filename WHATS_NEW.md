@@ -1,6 +1,15 @@
-# v0.8
+# v0.81
 
-## Nytt i v0.8
+## Nytt i v0.81
+
+- Webb-UI förbättrad för **responsiv och mobilvänlig visning**:
+  - bättre skalning efter fönsterstorlek
+  - förbättrad radbrytning för långa texter/loggar och långa filnamn
+  - historiktabellen anpassas till mobil-kort med tydliga fältetiketter
+  - förbättrad layout för navigation, knapprader och pagination på små skärmar
+- Fix för edge cases där innehåll tidigare kunde hamna utanför viewport på mindre enheter.
+
+## Tidigare i v0.8
 
 - Ny policy för att **behålla/inte behålla nypackad fil** baserat på inställbar tröskel `keep_min_savings_percent`.
   - Om besparing är under tröskeln behålls originalinnehåll, men filen döps ändå om med suffix `_rezipped` för att undvika omkörning.

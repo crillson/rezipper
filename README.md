@@ -1,4 +1,4 @@
-# Rezipper Docker (v0.8)
+# Rezipper Docker (v0.81)
 
 Docker-baserad tjänst som optimerar `.zip`, `.7z` och `.rar`-arkiv, verifierar CRC, flyttar original till `.trash`, loggar historik i SQLite och erbjuder lösenordsskyddat webbgränssnitt på port **5063**.
 
@@ -20,6 +20,7 @@ Docker-baserad tjänst som optimerar `.zip`, `.7z` och `.rar`-arkiv, verifierar 
 - `_rezipped`-markering för färdigbehandlade filer (skippas i framtida scanning)
 - Inställbar policy för att behålla nypackad fil (`keep_min_savings_percent`)
 - Mörkt/ljust tema i webbgränssnittet
+- Förbättrad responsiv/mobilanpassad UI-layout (bättre skalning, mindre overflow)
 - Basic Auth:
   - Antingen via env `AUTH_USER`/`AUTH_PASS`
   - Eller first-run setup på `/setup` (användaren väljer själv)
@@ -68,6 +69,7 @@ Exempel:
 - **Live status**: nuvarande fil, steg/status per tråd, köstatus, progressbar
 - **Kontroll**: Starta, Pausa, Återuppta, Stoppa
 - **Historik**: filnamn, originalstorlek, ny storlek, besparing %, ratio, status, tid, radera rad
+- **Mobilvänlig historikvy**: tabell anpassas till kort med fältetiketter på små skärmar
 - **Summering**: totalt sparad datamängd
 - **Sök + pagination**
 - **Loggfönster i realtid**
