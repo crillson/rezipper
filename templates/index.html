@@ -86,21 +86,23 @@
           <button id="searchBtn" data-i18n="btn_search">Search</button>
           <button id="clearHistoryBtn" class="danger" data-i18n="btn_clear_history">Clear history</button>
         </div>
-        <table>
-          <thead>
-            <tr>
-              <th data-i18n="th_filename">Filename</th>
-              <th data-i18n="th_original_size">Original size</th>
-              <th data-i18n="th_new_size">New size</th>
-              <th data-i18n="th_savings">Savings (%)</th>
-              <th data-i18n="th_ratio">Ratio</th>
-              <th data-i18n="th_status">Status</th>
-              <th data-i18n="th_time">Time</th>
-              <th data-i18n="th_actions">Actions</th>
-            </tr>
-          </thead>
-          <tbody id="historyBody"></tbody>
-        </table>
+        <div class="table-wrap">
+          <table class="history-table">
+            <thead>
+              <tr>
+                <th data-i18n="th_filename">Filename</th>
+                <th data-i18n="th_original_size">Original size</th>
+                <th data-i18n="th_new_size">New size</th>
+                <th data-i18n="th_savings">Savings (%)</th>
+                <th data-i18n="th_ratio">Ratio</th>
+                <th data-i18n="th_status">Status</th>
+                <th data-i18n="th_time">Time</th>
+                <th data-i18n="th_actions">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="historyBody"></tbody>
+          </table>
+        </div>
         <div class="pagination">
           <button id="prevPage" data-i18n="btn_prev">Previous</button>
           <span id="pageInfo">Page 1 / 1</span>

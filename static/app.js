@@ -215,17 +215,28 @@ async function refreshHistory() {
   updatePageInfo();
   el.historyBody.innerHTML = '';
 
+  const historyLabels = {
+    filename: t('th_filename', 'Filename'),
+    originalSize: t('th_original_size', 'Original size'),
+    newSize: t('th_new_size', 'New size'),
+    savings: t('th_savings', 'Savings (%)'),
+    ratio: t('th_ratio', 'Ratio'),
+    status: t('th_status', 'Status'),
+    time: t('th_time', 'Time'),
+    actions: t('th_actions', 'Actions')
+  };
+
   for (const row of data.items) {
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td>${row.filename}</td>
-      <td>${fmtBytes(row.original_size)}</td>
-      <td>${fmtBytes(row.new_size)}</td>
-      <td>${row.savings_percent.toFixed(2)}%</td>
-      <td>${row.ratio.toFixed(2)}</td>
-      <td>${row.status}</td>
-      <td>${new Date(row.created_at + 'Z').toLocaleString()}</td>
-      <td><button class="danger history-delete-btn" data-id="${row.id}">${t('btn_delete', 'Delete')}</button></td>
+      <td data-label="${historyLabels.filename}">${row.filename}</td>
+      <td data-label="${historyLabels.originalSize}">${fmtBytes(row.original_size)}</td>
+      <td data-label="${historyLabels.newSize}">${fmtBytes(row.new_size)}</td>
+      <td data-label="${historyLabels.savings}">${row.savings_percent.toFixed(2)}%</td>
+      <td data-label="${historyLabels.ratio}">${row.ratio.toFixed(2)}</td>
+      <td data-label="${historyLabels.status}">${row.status}</td>
+      <td data-label="${historyLabels.time}">${new Date(row.created_at + 'Z').toLocaleString()}</td>
+      <td data-label="${historyLabels.actions}"><button class="danger history-delete-btn" data-id="${row.id}">${t('btn_delete', 'Delete')}</button></td>
     `;
     el.historyBody.appendChild(tr);
   }
