@@ -827,6 +827,9 @@ class RezipperService:
         safe_name = rel.as_posix().replace("/", "__")
         target = TRASH_DIR / f"{timestamp}__{safe_name}"
         shutil.move(str(source), str(target))
+        # Sätt mtime till flyttid, så retention räknas från när filen hamnade i .trash.
+        now_ts = time.time()
+        os.utime(target, (now_ts, now_ts))
         return target
 
     def cleanup_trash(self):
