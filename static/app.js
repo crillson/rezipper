@@ -7,6 +7,9 @@ const state = {
 };
 
 const el = {
+  topLanguageSelect: document.getElementById('topLanguageSelect'),
+  navButtons: Array.from(document.querySelectorAll('.nav-btn')),
+  views: Array.from(document.querySelectorAll('.view')),
   statusMessage: document.getElementById('statusMessage'),
   currentFile: document.getElementById('currentFile'),
   queueStats: document.getElementById('queueStats'),
@@ -16,7 +19,13 @@ const el = {
   logOutput: document.getElementById('logOutput'),
   searchInput: document.getElementById('searchInput'),
   settingsForm: document.getElementById('settingsForm'),
-  debugScanOutput: document.getElementById('debugScanOutput')
+  debugScanOutput: document.getElementById('debugScanOutput'),
+  whatsNewVersion: document.getElementById('whatsNewVersion'),
+  whatsNewContent: document.getElementById('whatsNewContent'),
+  sysCpu: document.getElementById('sysCpu'),
+  sysRam: document.getElementById('sysRam'),
+  sysLoad: document.getElementById('sysLoad'),
+  sysUptime: document.getElementById('sysUptime')
 };
 
 async function post(url, body = {}) {
@@ -28,10 +37,21 @@ async function post(url, body = {}) {
 }
 
 function fmtBytes(n) {
+  if (typeof n !== 'number' || Number.isNaN(n)) return '-';
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function fmtUptime(seconds) {
+  if (typeof seconds !== 'number' || Number.isNaN(seconds)) return '-';
+  const s = Math.floor(seconds);
+  const days = Math.floor(s / 86400);
+  const hours = Math.floor((s % 86400) / 3600);
+  const mins = Math.floor((s % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h ${mins}m`;
+  return `${hours}h ${mins}m`;
 }
 
 function t(key, fallback = '') {
@@ -79,6 +99,15 @@ function updatePageInfo() {
   el.pageInfo.textContent = `${t('page_label', 'Page')} ${state.page} / ${state.pages}`;
 }
 
+function showView(viewId) {
+  el.views.forEach((view) => {
+    view.classList.toggle('active-view', view.id === viewId);
+  });
+  el.navButtons.forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.view === viewId);
+  });
+}
+
 async function refreshStatus() {
   const r = await fetch('/api/status');
   const s = await r.json();
@@ -96,6 +125,35 @@ async function runDebugScan() {
   const r = await fetch('/api/debug/scan');
   const data = await r.json();
   el.debugScanOutput.textContent = JSON.stringify(data, null, 2);
+}
+
+async function refreshSystemStatus() {
+  const r = await fetch('/api/system-status');
+  if (!r.ok) return;
+  const data = await r.json();
+  const cpuText = data.cpu_percent == null
+    ? t('sys_waiting_sample', 'sampling...')
+    : `${data.cpu_percent.toFixed(1)}% (${data.cpu_cores} ${t('sys_cores', 'cores')})`;
+
+  const memory = data.memory || {};
+  const used = fmtBytes(memory.used);
+  const total = fmtBytes(memory.total);
+  const ramText = (used === '-' || total === '-') ? '-' : `${used} / ${total}`;
+  const load = data.load_avg || {};
+  const loadText = [load['1m'], load['5m'], load['15m']].filter((v) => v != null).join(' / ') || '-';
+
+  el.sysCpu.textContent = cpuText;
+  el.sysRam.textContent = ramText;
+  el.sysLoad.textContent = loadText;
+  el.sysUptime.textContent = fmtUptime(data.uptime_seconds);
+}
+
+async function refreshWhatsNew() {
+  const r = await fetch('/api/whats-new');
+  if (!r.ok) return;
+  const data = await r.json();
+  el.whatsNewVersion.textContent = data.version || '-';
+  el.whatsNewContent.textContent = data.content || '';
 }
 
 async function refreshHistory() {
@@ -140,6 +198,7 @@ async function loadSettings() {
     }
   }
   const language = s.language || 'en';
+  el.topLanguageSelect.value = language;
   await loadLanguage(language);
 }
 
@@ -164,6 +223,21 @@ document.getElementById('startBtn').onclick = async () => {
 document.getElementById('pauseBtn').onclick = async () => { await post('/api/pause'); };
 document.getElementById('resumeBtn').onclick = async () => { await post('/api/resume'); };
 document.getElementById('debugScanBtn').onclick = runDebugScan;
+
+el.navButtons.forEach((btn) => {
+  btn.onclick = async () => {
+    showView(btn.dataset.view);
+    if (btn.dataset.view === 'whatsNewView') {
+      await refreshWhatsNew();
+    }
+  };
+});
+
+el.topLanguageSelect.onchange = async () => {
+  const chosen = el.topLanguageSelect.value;
+  await post('/api/settings', { language: chosen });
+  await loadSettings();
+};
 
 document.getElementById('searchBtn').onclick = async () => {
   state.search = el.searchInput.value.trim();
@@ -193,15 +267,18 @@ el.settingsForm.onsubmit = async (e) => {
   await post('/api/settings', payload);
   setStatusMessage(t('msg_settings_saved', 'Settings saved. Check system log for cron validation.'));
   await loadSettings();
+  await runDebugScan();
+  await refreshSystemStatus();
 };
 
 async function init() {
+  showView('dashboardView');
   await loadSettings();
-  await Promise.all([refreshStatus(), refreshHistory()]);
-  await runDebugScan();
+  await Promise.all([refreshStatus(), refreshHistory(), runDebugScan(), refreshSystemStatus(), refreshWhatsNew()]);
   connectLogs();
   setInterval(refreshStatus, 1500);
   setInterval(refreshHistory, 8000);
+  setInterval(refreshSystemStatus, 3000);
 }
 
 init();

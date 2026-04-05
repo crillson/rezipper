@@ -5,18 +5,69 @@ body {
   background: #0f172a;
   color: #e2e8f0;
 }
-header {
+
+.topbar {
   padding: 1rem 1.5rem;
   border-bottom: 1px solid #1e293b;
   background: #111827;
+  display: grid;
+  gap: .8rem;
 }
-header h1 { margin: 0; }
-header p { margin: .25rem 0 0; color: #94a3b8; }
+.topbar h1 { margin: 0; }
+.topbar p { margin: .25rem 0 0; color: #94a3b8; }
+
+.topbar-nav {
+  display: flex;
+  gap: .45rem;
+  flex-wrap: wrap;
+}
+
+.nav-btn {
+  background: #334155;
+}
+
+.nav-btn.active {
+  background: #2563eb;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+}
+
+.compact-label {
+  font-size: .85rem;
+  color: #94a3b8;
+}
+
+.topbar-actions select {
+  background: #0b1220;
+  color: #e2e8f0;
+  border: 1px solid #334155;
+  border-radius: .35rem;
+  padding: .35rem .45rem;
+}
+
+.statusbar {
+  margin: 1rem 1rem 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: .5rem;
+}
+
 main {
   padding: 1rem;
   display: grid;
   gap: 1rem;
 }
+
+.view { display: none; }
+.active-view {
+  display: grid;
+  gap: 1rem;
+}
+
 .card {
   background: #111827;
   border: 1px solid #1e293b;

@@ -7,136 +7,182 @@
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
-  <header>
-    <h1 data-i18n="header_title">Rezipper</h1>
-    <p data-i18n="header_subtitle">Archive optimization control panel</p>
+  <header class="topbar">
+    <div class="topbar-brand">
+      <h1 data-i18n="header_title">Rezipper</h1>
+      <p data-i18n="header_subtitle">Archive optimization control panel</p>
+    </div>
+    <nav class="topbar-nav">
+      <button class="nav-btn active" data-view="dashboardView" data-i18n="nav_dashboard">Dashboard</button>
+      <button class="nav-btn" data-view="settingsView" data-i18n="nav_settings">Settings</button>
+      <button class="nav-btn" data-view="whatsNewView" data-i18n="nav_whats_new">What's new</button>
+      <button class="nav-btn" data-view="aboutView" data-i18n="nav_about">About</button>
+    </nav>
+    <div class="topbar-actions">
+      <label class="compact-label" for="topLanguageSelect" data-i18n="language_label">Language</label>
+      <select id="topLanguageSelect">
+        <option value="en">English</option>
+        <option value="sv">Svenska</option>
+      </select>
+    </div>
   </header>
 
+  <section class="statusbar card">
+    <div><strong data-i18n="sys_cpu">CPU:</strong> <span id="sysCpu">-</span></div>
+    <div><strong data-i18n="sys_ram">RAM:</strong> <span id="sysRam">-</span></div>
+    <div><strong data-i18n="sys_load">Load:</strong> <span id="sysLoad">-</span></div>
+    <div><strong data-i18n="sys_uptime">Uptime:</strong> <span id="sysUptime">-</span></div>
+  </section>
+
   <main>
-    <section class="card">
-      <h2 data-i18n="live_status">Live status</h2>
-      <div class="status-row">
-        <strong data-i18n="message_label">Message:</strong>
-        <span id="statusMessage">-</span>
-      </div>
-      <div class="status-row">
-        <strong data-i18n="current_file_label">Current file:</strong>
-        <span id="currentFile">-</span>
-      </div>
-      <div class="status-row">
-        <strong data-i18n="queue_label">Queue:</strong>
-        <span id="queueStats">0 / 0</span>
-      </div>
-      <div class="progress-wrap">
-        <div class="progress-bar" id="progressBar"></div>
-      </div>
-      <div class="actions">
-        <button id="startBtn" data-i18n="btn_start">Start</button>
-        <button id="pauseBtn" class="warn" data-i18n="btn_pause">Pause</button>
-        <button id="resumeBtn" data-i18n="btn_resume">Resume</button>
-        <button id="debugScanBtn" type="button" data-i18n="btn_debug_scan">Debug scan</button>
-      </div>
-    </section>
-
-    <section class="card">
-      <h2 data-i18n="debug_scan_title">Debug scan</h2>
-      <pre id="debugScanOutput" class="log"></pre>
-    </section>
-
-    <section class="card">
-      <h2 data-i18n="history_title">History</h2>
-      <div class="controls">
-        <input type="text" id="searchInput" placeholder="Search filename..." data-i18n-placeholder="search_placeholder" />
-        <button id="searchBtn" data-i18n="btn_search">Search</button>
-      </div>
-      <table>
-        <thead>
-          <tr>
-            <th data-i18n="th_filename">Filename</th>
-            <th data-i18n="th_original_size">Original size</th>
-            <th data-i18n="th_new_size">New size</th>
-            <th data-i18n="th_savings">Savings (%)</th>
-            <th data-i18n="th_ratio">Ratio</th>
-            <th data-i18n="th_status">Status</th>
-            <th data-i18n="th_time">Time</th>
-          </tr>
-        </thead>
-        <tbody id="historyBody"></tbody>
-      </table>
-      <div class="pagination">
-        <button id="prevPage" data-i18n="btn_prev">Previous</button>
-        <span id="pageInfo">Page 1 / 1</span>
-        <button id="nextPage" data-i18n="btn_next">Next</button>
-      </div>
-    </section>
-
-    <section class="card">
-      <h2 data-i18n="system_log_title">System log (realtime)</h2>
-      <pre id="logOutput" class="log"></pre>
-    </section>
-
-    <section class="card">
-      <h2 data-i18n="settings_title">Settings</h2>
-      <form id="settingsForm">
-        <div class="grid">
-          <label>
-            <span data-i18n="trash_retention_label">Trash retention</span>
-            <input name="trash_retention" placeholder="24h" />
-          </label>
-          <label>
-            <span data-i18n="cron_label">Cron schedule</span>
-            <input name="cron_schedule" placeholder="0 0 * * *" />
-            <small data-i18n="cron_help">Supports 5-field crontab and 6/7-field Quartz-like expressions</small>
-          </label>
-          <label>
-            <span data-i18n="scan_sort_label">Sorting (name/size/date)</span>
-            <input name="scan_sort" placeholder="name" />
-          </label>
-          <label>
-            <span data-i18n="work_dir_label">Work directory</span>
-            <input name="work_dir" placeholder="/jobs" />
-            <small data-i18n="work_dir_help">Directory for extract/repack workspace (can be outside /data)</small>
-          </label>
-          <label>
-            <span data-i18n="language_label">Language</span>
-            <select name="language" id="languageSelect">
-              <option value="en">English</option>
-              <option value="sv">Svenska</option>
-            </select>
-          </label>
-          <label>
-            <span data-i18n="debug_logging_label">Verbose debug logging</span>
-            <input name="debug_logging" id="debugLogging" type="checkbox" />
-          </label>
-          <label>
-            SMTP host
-            <input name="smtp_host" />
-          </label>
-          <label>
-            SMTP port
-            <input name="smtp_port" />
-          </label>
-          <label>
-            SMTP user
-            <input name="smtp_user" />
-          </label>
-          <label>
-            SMTP pass
-            <input name="smtp_pass" type="password" />
-          </label>
-          <label>
-            SMTP from
-            <input name="smtp_from" />
-          </label>
-          <label>
-            SMTP to
-            <input name="smtp_to" />
-          </label>
+    <section id="dashboardView" class="view active-view">
+      <section class="card">
+        <h2 data-i18n="live_status">Live status</h2>
+        <div class="status-row">
+          <strong data-i18n="message_label">Message:</strong>
+          <span id="statusMessage">-</span>
+        </div>
+        <div class="status-row">
+          <strong data-i18n="current_file_label">Current file:</strong>
+          <span id="currentFile">-</span>
+        </div>
+        <div class="status-row">
+          <strong data-i18n="queue_label">Queue:</strong>
+          <span id="queueStats">0 / 0</span>
+        </div>
+        <div class="progress-wrap">
+          <div class="progress-bar" id="progressBar"></div>
         </div>
         <div class="actions">
-          <button type="submit" data-i18n="btn_save_settings">Save settings</button>
+          <button id="startBtn" data-i18n="btn_start">Start</button>
+          <button id="pauseBtn" class="warn" data-i18n="btn_pause">Pause</button>
+          <button id="resumeBtn" data-i18n="btn_resume">Resume</button>
+          <button id="debugScanBtn" type="button" data-i18n="btn_debug_scan">Debug scan</button>
         </div>
-      </form>
+      </section>
+
+      <section class="card">
+        <h2 data-i18n="debug_scan_title">Debug scan</h2>
+        <pre id="debugScanOutput" class="log"></pre>
+      </section>
+
+      <section class="card">
+        <h2 data-i18n="history_title">History</h2>
+        <div class="controls">
+          <input type="text" id="searchInput" placeholder="Search filename..." data-i18n-placeholder="search_placeholder" />
+          <button id="searchBtn" data-i18n="btn_search">Search</button>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th data-i18n="th_filename">Filename</th>
+              <th data-i18n="th_original_size">Original size</th>
+              <th data-i18n="th_new_size">New size</th>
+              <th data-i18n="th_savings">Savings (%)</th>
+              <th data-i18n="th_ratio">Ratio</th>
+              <th data-i18n="th_status">Status</th>
+              <th data-i18n="th_time">Time</th>
+            </tr>
+          </thead>
+          <tbody id="historyBody"></tbody>
+        </table>
+        <div class="pagination">
+          <button id="prevPage" data-i18n="btn_prev">Previous</button>
+          <span id="pageInfo">Page 1 / 1</span>
+          <button id="nextPage" data-i18n="btn_next">Next</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2 data-i18n="system_log_title">System log (realtime)</h2>
+        <pre id="logOutput" class="log"></pre>
+      </section>
+    </section>
+
+    <section id="settingsView" class="view">
+      <section class="card">
+        <h2 data-i18n="settings_title">Settings</h2>
+        <form id="settingsForm">
+          <div class="grid">
+            <label>
+              <span data-i18n="trash_retention_label">Trash retention</span>
+              <input name="trash_retention" placeholder="24h" />
+            </label>
+            <label>
+              <span data-i18n="cron_label">Cron schedule</span>
+              <input name="cron_schedule" placeholder="0 0 * * *" />
+              <small data-i18n="cron_help">Supports 5-field crontab and 6/7-field Quartz-like expressions</small>
+            </label>
+            <label>
+              <span data-i18n="scan_sort_label">Sorting (name/size/date)</span>
+              <input name="scan_sort" placeholder="name" />
+            </label>
+            <label>
+              <span data-i18n="work_dir_label">Work directory</span>
+              <input name="work_dir" placeholder="/jobs" />
+              <small data-i18n="work_dir_help">Directory for extract/repack workspace (can be outside /data)</small>
+            </label>
+            <label>
+              <span data-i18n="compression_threads_label">Compression threads (0 = auto)</span>
+              <input name="compression_threads" id="compressionThreads" type="number" min="0" step="1" placeholder="0" />
+              <small data-i18n="compression_threads_help">Limit CPU threads for 7z/rar compression</small>
+            </label>
+            <label>
+              <span data-i18n="language_label">Language</span>
+              <select name="language" id="languageSelect">
+                <option value="en">English</option>
+                <option value="sv">Svenska</option>
+              </select>
+            </label>
+            <label>
+              <span data-i18n="debug_logging_label">Verbose debug logging</span>
+              <input name="debug_logging" id="debugLogging" type="checkbox" />
+            </label>
+            <label>
+              SMTP host
+              <input name="smtp_host" />
+            </label>
+            <label>
+              SMTP port
+              <input name="smtp_port" />
+            </label>
+            <label>
+              SMTP user
+              <input name="smtp_user" />
+            </label>
+            <label>
+              SMTP pass
+              <input name="smtp_pass" type="password" />
+            </label>
+            <label>
+              SMTP from
+              <input name="smtp_from" />
+            </label>
+            <label>
+              SMTP to
+              <input name="smtp_to" />
+            </label>
+          </div>
+          <div class="actions">
+            <button type="submit" data-i18n="btn_save_settings">Save settings</button>
+          </div>
+        </form>
+      </section>
+    </section>
+
+    <section id="whatsNewView" class="view">
+      <section class="card">
+        <h2 data-i18n="whats_new_title">What's new</h2>
+        <div class="status-row"><strong data-i18n="version_label">Version:</strong> <span id="whatsNewVersion">-</span></div>
+        <pre id="whatsNewContent" class="log"></pre>
+      </section>
+    </section>
+
+    <section id="aboutView" class="view">
+      <section class="card">
+        <h2 data-i18n="about_title">About</h2>
+        <p data-i18n="about_text">Rezipper pre-release-0.6. Archive optimization utility with scheduling, history and diagnostics.</p>
+      </section>
     </section>
   </main>
 

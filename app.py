@@ -34,9 +34,11 @@ DEFAULT_TRASH_RETENTION = os.environ.get("TRASH_RETENTION", "24h")
 DEFAULT_CRON = os.environ.get("CRON_SCHEDULE", "0 0 * * *")
 DEFAULT_SCAN_SORT = "name"
 DEFAULT_WORK_DIR = os.environ.get("WORK_DIR", "/jobs")
+DEFAULT_COMPRESSION_THREADS = os.environ.get("COMPRESSION_THREADS", "0")
 ALLOWED_LANGUAGES = {"en", "sv"}
 SUPPORTED_FORMATS = [".zip", ".7z", ".rar"]
 SUPPORTED_FORMATS_SET = set(SUPPORTED_FORMATS)
+WHATS_NEW_PATH = Path(os.environ.get("WHATS_NEW_PATH", "/app/WHATS_NEW.md"))
 
 app = Flask(__name__)
 
@@ -278,6 +280,18 @@ class RezipperService:
         stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
         return self._get_work_root() / f"{safe_name}__{stamp}"
 
+    def _compression_threads(self) -> int:
+        configured = (self.db.get_setting("compression_threads", DEFAULT_COMPRESSION_THREADS) or "0").strip()
+        try:
+            value = int(configured)
+        except ValueError:
+            value = 0
+
+        max_threads = os.cpu_count() or 1
+        if value <= 0:
+            return 0
+        return min(value, max_threads)
+
     def _debug_enabled(self) -> bool:
         return parse_bool(self.db.get_setting("debug_logging", "false"), default=False)
 
@@ -339,7 +353,10 @@ class RezipperService:
             self.pause_event.set()
             self.worker = threading.Thread(target=self._run, args=(files,), daemon=True)
             self.worker.start()
+            threads = self._compression_threads()
+            threads_text = str(threads) if threads > 0 else "auto"
             self.logger.write("INFO", f"Startar optimering. {len(files)} filer i kö.")
+            self.logger.write("INFO", f"Komprimeringstrådar: {threads_text}")
             return True
 
     def debug_scan(self) -> Dict:
@@ -349,6 +366,7 @@ class RezipperService:
             "data_dir": str(DATA_DIR),
             "trash_dir": str(TRASH_DIR),
             "work_dir": str(self._get_work_root()),
+            "compression_threads": self._compression_threads(),
             "scan_sort": self.db.get_setting("scan_sort", DEFAULT_SCAN_SORT),
             "supported_formats": SUPPORTED_FORMATS,
             "found_count": len(files),
@@ -458,6 +476,9 @@ class RezipperService:
     def _recompress(self, source: Path, target: Path, work_dir: Path):
         archive_type = source.suffix.lower()
         self._debug_log(f"Startar recompress för {source} ({archive_type})")
+        thread_count = self._compression_threads()
+        thread_hint = f" (threads={thread_count})" if thread_count > 0 else " (threads=auto)"
+        self._debug_log(f"Komprimeringsinställning{thread_hint}")
 
         # ZIP kan hanteras utan externa binärer som fallback.
         if archive_type == ".zip" and not shutil.which("7z"):
@@ -486,6 +507,8 @@ class RezipperService:
         if archive_type in {".zip", ".7z"}:
             target_type = "zip" if archive_type == ".zip" else "7z"
             add_cmd = ["7z", "a", f"-t{target_type}", "-mx=9", str(target), "."]
+            if thread_count > 0:
+                add_cmd.insert(3, f"-mmt={thread_count}")
             r = self._run_command(add_cmd, cwd=extract_dir)
             if r.returncode != 0:
                 raise RuntimeError(
@@ -500,6 +523,8 @@ class RezipperService:
                 )
 
             add_cmd = ["rar", "a", "-idq", "-m5", str(target), "."]
+            if thread_count > 0:
+                add_cmd.insert(3, f"-mt{thread_count}")
             r = self._run_command(add_cmd, cwd=extract_dir)
             if r.returncode != 0:
                 raise RuntimeError(
@@ -563,6 +588,8 @@ def init_defaults():
         db.set_setting("scan_sort", DEFAULT_SCAN_SORT)
     if db.get_setting("work_dir") is None:
         db.set_setting("work_dir", DEFAULT_WORK_DIR)
+    if db.get_setting("compression_threads") is None:
+        db.set_setting("compression_threads", DEFAULT_COMPRESSION_THREADS)
     if db.get_setting("debug_logging") is None:
         db.set_setting("debug_logging", "false")
     if db.get_setting("language") is None:
@@ -746,6 +773,7 @@ def api_get_settings():
     settings.setdefault("cron_schedule", DEFAULT_CRON)
     settings.setdefault("scan_sort", DEFAULT_SCAN_SORT)
     settings.setdefault("work_dir", DEFAULT_WORK_DIR)
+    settings.setdefault("compression_threads", DEFAULT_COMPRESSION_THREADS)
     settings.setdefault("debug_logging", "false")
     settings.setdefault("language", "en")
     if settings.get("language") not in ALLOWED_LANGUAGES:
@@ -761,6 +789,7 @@ def api_set_settings():
         "cron_schedule",
         "scan_sort",
         "work_dir",
+        "compression_threads",
         "debug_logging",
         "language",
         "smtp_host",
@@ -780,6 +809,15 @@ def api_set_settings():
                 work_dir = str(v).strip() or DEFAULT_WORK_DIR
                 db.set_setting("work_dir", work_dir)
                 continue
+            if k == "compression_threads":
+                max_threads = os.cpu_count() or 1
+                try:
+                    raw_value = int(str(v).strip() or "0")
+                except ValueError:
+                    raw_value = 0
+                sanitized = max(0, min(raw_value, max_threads))
+                db.set_setting("compression_threads", str(sanitized))
+                continue
             if k == "debug_logging":
                 db.set_setting("debug_logging", "true" if parse_bool(str(v)) else "false")
                 continue
@@ -797,6 +835,106 @@ def api_log_stream():
 @app.get("/api/debug/scan")
 def api_debug_scan():
     return jsonify(service.debug_scan())
+
+
+_cpu_lock = threading.Lock()
+_prev_cpu_total: Optional[int] = None
+_prev_cpu_idle: Optional[int] = None
+
+
+def _read_cpu_times() -> Optional[tuple[int, int]]:
+    try:
+        line = Path("/proc/stat").read_text(encoding="utf-8").splitlines()[0]
+        parts = line.split()
+        if not parts or parts[0] != "cpu":
+            return None
+        values = [int(v) for v in parts[1:]]
+        total = sum(values)
+        idle = values[3] + (values[4] if len(values) > 4 else 0)
+        return total, idle
+    except Exception:
+        return None
+
+
+def get_cpu_usage_percent() -> Optional[float]:
+    global _prev_cpu_total, _prev_cpu_idle
+    current = _read_cpu_times()
+    if not current:
+        return None
+
+    total, idle = current
+    with _cpu_lock:
+        if _prev_cpu_total is None or _prev_cpu_idle is None:
+            _prev_cpu_total = total
+            _prev_cpu_idle = idle
+            return None
+
+        delta_total = total - _prev_cpu_total
+        delta_idle = idle - _prev_cpu_idle
+        _prev_cpu_total = total
+        _prev_cpu_idle = idle
+
+    if delta_total <= 0:
+        return None
+    usage = (1.0 - (delta_idle / delta_total)) * 100.0
+    return max(0.0, min(100.0, usage))
+
+
+def get_memory_snapshot() -> Dict[str, Optional[int]]:
+    total = None
+    available = None
+    try:
+        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            if line.startswith("MemTotal:"):
+                total = int(line.split()[1]) * 1024
+            elif line.startswith("MemAvailable:"):
+                available = int(line.split()[1]) * 1024
+        used = (total - available) if total is not None and available is not None else None
+        return {"total": total, "available": available, "used": used}
+    except Exception:
+        return {"total": None, "available": None, "used": None}
+
+
+def get_uptime_seconds() -> Optional[float]:
+    try:
+        value = Path("/proc/uptime").read_text(encoding="utf-8").split()[0]
+        return float(value)
+    except Exception:
+        return None
+
+
+def read_whats_new() -> str:
+    try:
+        if WHATS_NEW_PATH.exists():
+            return WHATS_NEW_PATH.read_text(encoding="utf-8")
+    except Exception:
+        pass
+    return "# pre-release-0.6\n\nNo release notes available."
+
+
+@app.get("/api/system-status")
+def api_system_status():
+    cpu_percent = get_cpu_usage_percent()
+    mem = get_memory_snapshot()
+    load_1m, load_5m, load_15m = os.getloadavg()
+    return jsonify(
+        {
+            "cpu_percent": round(cpu_percent, 1) if cpu_percent is not None else None,
+            "cpu_cores": os.cpu_count() or 1,
+            "load_avg": {
+                "1m": round(load_1m, 2),
+                "5m": round(load_5m, 2),
+                "15m": round(load_15m, 2),
+            },
+            "memory": mem,
+            "uptime_seconds": get_uptime_seconds(),
+        }
+    )
+
+
+@app.get("/api/whats-new")
+def api_whats_new():
+    return jsonify({"version": "pre-release-0.6", "content": read_whats_new()})
 
 
 def cron_trigger_from_expression(expr: str) -> CronTrigger:
