@@ -1,17 +1,22 @@
-# v0.7
+# v0.8
 
-## Nytt i v0.7
+## Nytt i v0.8
 
-- Rezipper minns nu vilka filer som redan är färdigoptimerade och hoppar över oförändrade filer efter omstart.
-- Nytt val i inställningar: välj målformat vid ompackning (`same`, `zip`, `7z`, `rar`).
-- Konvertering mellan format stöds nu, t.ex. `.zip` -> `.7z` eller `.rar`.
-- Live-status visar nu aktivt steg per körning (queued/preparing/extracting/packing/crc/replace m.fl.).
-- Dashboard visar trådaktivitet för kö-tråd och komprimeringstrådar i realtid.
-- Debug-scan visar valt output-format och antal filer som skippades som redan bearbetade.
-- Versionsinformation uppdaterad till `v0.7` i API/UI.
+- Ny policy för att **behålla/inte behålla nypackad fil** baserat på inställbar tröskel `keep_min_savings_percent`.
+  - Om besparing är under tröskeln behålls originalinnehåll, men filen döps ändå om med suffix `_rezipped` för att undvika omkörning.
+- `_rezipped`-markering används konsekvent för färdigbehandlade filer och dessa hoppas över vid scanning.
+- Ny **Stop-knapp** i UI för att avbryta aktiv körning; arbetskatalogen (`/jobs` eller konfigurerad `work_dir`) rensas efter stopp.
+- Cron-körning startar inte om en körning redan är aktiv (överlappsskydd).
+- Ny historikhantering:
+  - ta bort enskild rad
+  - töm all historik (med bekräftelse)
+  - summering av totalt sparad datamängd
+- Ny inställning för **ljust/mörkt läge** (`theme`).
+- Ny funktion för att **byta lösenord** för web UI direkt i Settings (om auth inte är låst via env-variabler).
+- API/version uppdaterad till `v0.8`.
 
 ## Noteringar
 
-- Om målformat skiljer sig från källformat kommer filen att byta filändelse vid slutförd körning.
-- Vid konvertering till RAR krävs `rar`-binären installerad i containern/systemet.
-- CPU-visning kan visa `sampling...` första uppdateringen innan nästa mätintervall.
+- RAR-konvertering kräver fortsatt `rar`-binär.
+- CPU-status kan visa `sampling...` vid första mätningen.
+- Om `AUTH_USER`/`AUTH_PASS` används via miljövariabler är lösenordsbyte i UI spärrat av design.

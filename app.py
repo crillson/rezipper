@@ -36,8 +36,11 @@ DEFAULT_SCAN_SORT = "name"
 DEFAULT_WORK_DIR = os.environ.get("WORK_DIR", "/jobs")
 DEFAULT_COMPRESSION_THREADS = os.environ.get("COMPRESSION_THREADS", "0")
 DEFAULT_OUTPUT_FORMAT = os.environ.get("OUTPUT_FORMAT", "same")
+DEFAULT_KEEP_MIN_SAVINGS_PERCENT = os.environ.get("KEEP_MIN_SAVINGS_PERCENT", "0")
+DEFAULT_THEME = os.environ.get("THEME", "dark")
 ALLOWED_LANGUAGES = {"en", "sv"}
 ALLOWED_OUTPUT_FORMATS = {"same", "zip", "7z", "rar"}
+ALLOWED_THEMES = {"dark", "light"}
 SUPPORTED_FORMATS = [".zip", ".7z", ".rar"]
 SUPPORTED_FORMATS_SET = set(SUPPORTED_FORMATS)
 WHATS_NEW_PATH = Path(os.environ.get("WHATS_NEW_PATH", "/app/WHATS_NEW.md"))
@@ -206,6 +209,45 @@ class Database:
             "pages": max((total + per_page - 1) // per_page, 1),
         }
 
+    def delete_job(self, job_id: int) -> bool:
+        with self.lock:
+            conn = self._connect()
+            cur = conn.execute("DELETE FROM jobs WHERE id=?", (job_id,))
+            conn.commit()
+            deleted = cur.rowcount > 0
+            conn.close()
+        return deleted
+
+    def clear_history(self) -> int:
+        with self.lock:
+            conn = self._connect()
+            cur = conn.execute("DELETE FROM jobs")
+            conn.commit()
+            removed = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+            conn.close()
+        return removed
+
+    def history_summary(self) -> Dict:
+        with self.lock:
+            conn = self._connect()
+            row = conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS total_jobs,
+                    SUM(CASE WHEN status='SUCCESS' THEN 1 ELSE 0 END) AS success_jobs,
+                    SUM(CASE WHEN status='FAILED' THEN 1 ELSE 0 END) AS failed_jobs,
+                    SUM(CASE WHEN status='SUCCESS' THEN savings_bytes ELSE 0 END) AS total_savings_bytes
+                FROM jobs
+                """
+            ).fetchone()
+            conn.close()
+        return {
+            "total_jobs": int(row["total_jobs"] or 0),
+            "success_jobs": int(row["success_jobs"] or 0),
+            "failed_jobs": int(row["failed_jobs"] or 0),
+            "total_savings_bytes": int(row["total_savings_bytes"] or 0),
+        }
+
     def upsert_processed_file(self, rel_path: str, size: int, mtime: float):
         with self.lock:
             conn = self._connect()
@@ -274,6 +316,7 @@ class LogBus:
 class State:
     running: bool = False
     paused: bool = False
+    stopping: bool = False
     current_file: Optional[str] = None
     current_stage: str = "idle"
     thread_statuses: List[Dict[str, str]] = field(default_factory=list)
@@ -290,6 +333,7 @@ class RezipperService:
         self.lock = threading.Lock()
         self.pause_event = threading.Event()
         self.pause_event.set()
+        self.stop_event = threading.Event()
         self.worker: Optional[threading.Thread] = None
 
         DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -331,6 +375,14 @@ class RezipperService:
         if configured == "same":
             return source_suffix.lower()
         return f".{configured}"
+
+    def _min_savings_percent_to_keep(self) -> float:
+        raw = (self.db.get_setting("keep_min_savings_percent", DEFAULT_KEEP_MIN_SAVINGS_PERCENT) or "0").strip()
+        try:
+            value = float(raw)
+        except ValueError:
+            value = 0.0
+        return max(0.0, min(100.0, value))
 
     def _is_rezipped_name(self, path: Path) -> bool:
         return path.stem.lower().endswith("_rezipped")
@@ -456,6 +508,7 @@ class RezipperService:
             self.state = State(
                 running=True,
                 paused=False,
+                stopping=False,
                 current_file=None,
                 current_stage="queued",
                 thread_statuses=self._format_thread_statuses("-", "queued", "idle"),
@@ -463,6 +516,7 @@ class RezipperService:
                 processed_files=0,
                 last_run=now_iso(),
             )
+            self.stop_event.clear()
             self.pause_event.set()
             self.worker = threading.Thread(target=self._run, args=(files,), daemon=True)
             self.worker.start()
@@ -500,6 +554,21 @@ class RezipperService:
             self.pause_event.clear()
         self.logger.write("INFO", "Kön pausad via webbgränssnitt.")
 
+    def stop(self) -> bool:
+        with self.lock:
+            if not self.state.running:
+                return False
+            self.state.stopping = True
+            self.state.paused = False
+            self.state.current_stage = "stopping"
+            current_file = self.state.current_file or "-"
+            self.state.thread_statuses = self._format_thread_statuses(current_file, "stopping", "stopping")
+
+        self.stop_event.set()
+        self.pause_event.set()
+        self.logger.write("WARNING", "Stop begärd: körningen avbryts så snart möjligt.")
+        return True
+
     def resume(self):
         should_start = False
         with self.lock:
@@ -520,9 +589,28 @@ class RezipperService:
         payload["progress_percent"] = int((payload["processed_files"] / total) * 100)
         return payload
 
+    def _cleanup_work_root(self):
+        work_root = self._get_work_root()
+        removed = 0
+        for child in work_root.iterdir():
+            try:
+                if child.is_dir():
+                    shutil.rmtree(child, ignore_errors=True)
+                else:
+                    child.unlink(missing_ok=True)
+                removed += 1
+            except Exception as exc:
+                self.logger.write("WARNING", f"Kunde inte rensa arbetsobjekt {child}: {exc}")
+        if removed:
+            self.logger.write("INFO", f"Rensade {removed} objekt i arbetskatalogen ({work_root}).")
+
     def _run(self, files: List[Path]):
         for file in files:
+            if self.stop_event.is_set():
+                break
             self.pause_event.wait()
+            if self.stop_event.is_set():
+                break
             with self.lock:
                 self.state.current_file = str(file.relative_to(DATA_DIR))
                 self.state.current_stage = "queued"
@@ -539,13 +627,20 @@ class RezipperService:
                 self.state.current_stage = "waiting"
                 self.state.thread_statuses = self._format_thread_statuses("-", "waiting", "idle")
 
+        was_stopped = self.stop_event.is_set()
         with self.lock:
             self.state.running = False
             self.state.paused = False
+            self.state.stopping = False
             self.state.current_file = None
             self.state.current_stage = "idle"
             self.state.thread_statuses = self._format_thread_statuses("-", "idle", "idle")
-        self.logger.write("INFO", "Optimeringskön är färdig.")
+        self.stop_event.clear()
+        self._cleanup_work_root()
+        if was_stopped:
+            self.logger.write("WARNING", "Optimeringskön stoppades av användaren.")
+        else:
+            self.logger.write("INFO", "Optimeringskön är färdig.")
 
     def _process_single(self, path: Path):
         start = time.time()
@@ -566,21 +661,39 @@ class RezipperService:
             self._crc_test(optimized)
 
             self._set_stage(path, "replace", "idle")
-            new_size = optimized.stat().st_size
+            candidate_new_size = optimized.stat().st_size
+            savings = original_size - candidate_new_size
+            savings_percent = (savings / original_size * 100.0) if original_size else 0.0
+            keep_threshold = self._min_savings_percent_to_keep()
+            keep_optimized = savings_percent >= keep_threshold
+
             target_name = f"{path.stem}_rezipped{target_suffix}"
             final_path = path.with_name(target_name)
-            trash_target = self._move_original_to_trash(path)
+            trash_target = None
             extra_trash_target = None
             if final_path.exists() and final_path != path:
                 extra_trash_target = self._move_original_to_trash(final_path)
-            shutil.move(str(optimized), str(final_path))
+
+            if keep_optimized:
+                trash_target = self._move_original_to_trash(path)
+                shutil.move(str(optimized), str(final_path))
+                new_size = candidate_new_size
+            else:
+                optimized.unlink(missing_ok=True)
+                source_suffix = path.suffix.lower()
+                original_marked = path.with_name(f"{path.stem}_rezipped{source_suffix}")
+                if original_marked.exists() and original_marked != path:
+                    self._move_original_to_trash(original_marked)
+                shutil.move(str(path), str(original_marked))
+                final_path = original_marked
+                new_size = original_size
+                savings = 0
+                savings_percent = 0.0
 
             final_rel_name = str(final_path.relative_to(DATA_DIR))
             final_stat = final_path.stat()
             self.db.upsert_processed_file(final_rel_name, final_stat.st_size, final_stat.st_mtime)
 
-            savings = original_size - new_size
-            savings_percent = (savings / original_size * 100.0) if original_size else 0.0
             ratio = (original_size / new_size * 100.0) if new_size else 0.0
             self.db.insert_job(
                 {
@@ -598,9 +711,11 @@ class RezipperService:
             )
             replaced_text = f"{rel_name} -> {final_rel_name}" if rel_name != final_rel_name else final_rel_name
             extra_text = f", replaced old target: {extra_trash_target.name}" if extra_trash_target else ""
+            keep_text = "behöll nypackad fil" if keep_optimized else "behöll original (under tröskel)"
+            trash_text = f", trash: {trash_target.name}" if trash_target else ""
             self.logger.write(
                 "INFO",
-                f"Klar: {replaced_text} ({original_size} -> {new_size} bytes, trash: {trash_target.name}{extra_text})",
+                f"Klar: {replaced_text} ({original_size} -> {new_size} bytes, {keep_text}{trash_text}{extra_text})",
             )
             self._set_stage(final_path, "completed", "idle")
         except Exception as exc:
@@ -749,6 +864,10 @@ def init_defaults():
         db.set_setting("compression_threads", DEFAULT_COMPRESSION_THREADS)
     if db.get_setting("output_format") is None:
         db.set_setting("output_format", DEFAULT_OUTPUT_FORMAT if DEFAULT_OUTPUT_FORMAT in ALLOWED_OUTPUT_FORMATS else "same")
+    if db.get_setting("keep_min_savings_percent") is None:
+        db.set_setting("keep_min_savings_percent", DEFAULT_KEEP_MIN_SAVINGS_PERCENT)
+    if db.get_setting("theme") is None:
+        db.set_setting("theme", DEFAULT_THEME if DEFAULT_THEME in ALLOWED_THEMES else "dark")
     if db.get_setting("debug_logging") is None:
         db.set_setting("debug_logging", "false")
     if db.get_setting("language") is None:
@@ -846,12 +965,19 @@ def configure_scheduler():
     cron = db.get_setting("cron_schedule", DEFAULT_CRON)
     try:
         trigger = cron_trigger_from_expression(cron)
-        scheduler.add_job(service.start, trigger, id="optimizer_cron", replace_existing=True)
+        scheduler.add_job(start_from_scheduler, trigger, id="optimizer_cron", replace_existing=True)
         log_bus.write("INFO", f"Cron-schema laddat: {cron}")
     except Exception as exc:
         log_bus.write("ERROR", f"Ogiltigt cron-schema '{cron}': {exc}")
 
     scheduler.add_job(service.cleanup_trash, "interval", hours=1, id="trash_cleanup", replace_existing=True)
+
+
+def start_from_scheduler():
+    if service.status().get("running"):
+        log_bus.write("INFO", "Cron-körning hoppades över: en körning pågår redan.")
+        return
+    service.start()
 
 
 @app.get("/setup")
@@ -917,12 +1043,34 @@ def api_resume():
     return jsonify({"ok": True})
 
 
+@app.post("/api/stop")
+def api_stop():
+    stopped = service.stop()
+    return jsonify({"ok": stopped})
+
+
 @app.get("/api/history")
 def api_history():
     page = max(int(request.args.get("page", "1")), 1)
     per_page = min(max(int(request.args.get("per_page", "20")), 1), 100)
     search = request.args.get("search", "").strip()
     return jsonify(db.history(page=page, per_page=per_page, search=search))
+
+
+@app.get("/api/history/summary")
+def api_history_summary():
+    return jsonify(db.history_summary())
+
+
+@app.delete("/api/history/<int:job_id>")
+def api_history_delete(job_id: int):
+    return jsonify({"ok": db.delete_job(job_id)})
+
+
+@app.post("/api/history/clear")
+def api_history_clear():
+    removed = db.clear_history()
+    return jsonify({"ok": True, "removed": removed})
 
 
 @app.get("/api/settings")
@@ -934,10 +1082,14 @@ def api_get_settings():
     settings.setdefault("work_dir", DEFAULT_WORK_DIR)
     settings.setdefault("compression_threads", DEFAULT_COMPRESSION_THREADS)
     settings.setdefault("output_format", DEFAULT_OUTPUT_FORMAT if DEFAULT_OUTPUT_FORMAT in ALLOWED_OUTPUT_FORMATS else "same")
+    settings.setdefault("keep_min_savings_percent", DEFAULT_KEEP_MIN_SAVINGS_PERCENT)
+    settings.setdefault("theme", DEFAULT_THEME if DEFAULT_THEME in ALLOWED_THEMES else "dark")
     settings.setdefault("debug_logging", "false")
     settings.setdefault("language", "en")
     if settings.get("output_format") not in ALLOWED_OUTPUT_FORMATS:
         settings["output_format"] = "same"
+    if settings.get("theme") not in ALLOWED_THEMES:
+        settings["theme"] = "dark"
     if settings.get("language") not in ALLOWED_LANGUAGES:
         settings["language"] = "en"
     return jsonify(settings)
@@ -953,6 +1105,8 @@ def api_set_settings():
         "work_dir",
         "compression_threads",
         "output_format",
+        "keep_min_savings_percent",
+        "theme",
         "debug_logging",
         "language",
         "smtp_host",
@@ -985,12 +1139,56 @@ def api_set_settings():
                 selected = str(v).strip().lower()
                 db.set_setting("output_format", selected if selected in ALLOWED_OUTPUT_FORMATS else "same")
                 continue
+            if k == "keep_min_savings_percent":
+                try:
+                    threshold = float(str(v).strip() or "0")
+                except ValueError:
+                    threshold = 0.0
+                threshold = max(0.0, min(100.0, threshold))
+                db.set_setting("keep_min_savings_percent", f"{threshold:.2f}")
+                continue
+            if k == "theme":
+                theme = str(v).strip().lower()
+                db.set_setting("theme", theme if theme in ALLOWED_THEMES else "dark")
+                continue
             if k == "debug_logging":
                 db.set_setting("debug_logging", "true" if parse_bool(str(v)) else "false")
                 continue
             db.set_setting(k, str(v))
 
     configure_scheduler()
+    return jsonify({"ok": True})
+
+
+def using_env_credentials() -> bool:
+    return bool(os.environ.get("AUTH_USER") and os.environ.get("AUTH_PASS"))
+
+
+@app.post("/api/change-password")
+def api_change_password():
+    if using_env_credentials():
+        return jsonify({"ok": False, "error_code": "env_auth_locked"}), 400
+
+    if not AUTH_PATH.exists():
+        return jsonify({"ok": False, "error_code": "auth_not_configured"}), 400
+
+    data = request.get_json(force=True)
+    current_password = data.get("current_password") or ""
+    new_password = data.get("new_password") or ""
+
+    auth_data = json.loads(AUTH_PATH.read_text(encoding="utf-8"))
+    username = auth_data.get("username", "")
+    if not check_password_hash(auth_data.get("password_hash", ""), current_password):
+        return jsonify({"ok": False, "error_code": "invalid_current_password"}), 400
+
+    if len(new_password) < 6:
+        return jsonify({"ok": False, "error_code": "password_too_short"}), 400
+
+    AUTH_PATH.write_text(
+        json.dumps({"username": username, "password_hash": generate_password_hash(new_password)}),
+        encoding="utf-8",
+    )
+    log_bus.write("INFO", "Web UI-lösenord uppdaterat via inställningar.")
     return jsonify({"ok": True})
 
 
@@ -1076,7 +1274,7 @@ def read_whats_new() -> str:
             return WHATS_NEW_PATH.read_text(encoding="utf-8")
     except Exception:
         pass
-    return "# v0.7\n\nNo release notes available."
+    return "# v0.8\n\nNo release notes available."
 
 
 @app.get("/api/system-status")
@@ -1101,7 +1299,7 @@ def api_system_status():
 
 @app.get("/api/whats-new")
 def api_whats_new():
-    return jsonify({"version": "v0.7", "content": read_whats_new()})
+    return jsonify({"version": "v0.8", "content": read_whats_new()})
 
 
 def cron_trigger_from_expression(expr: str) -> CronTrigger:

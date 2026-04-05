@@ -1,4 +1,4 @@
-# Rezipper Docker (v3.0)
+# Rezipper Docker (v0.8)
 
 Docker-baserad tjänst som optimerar `.zip`, `.7z` och `.rar`-arkiv, verifierar CRC, flyttar original till `.trash`, loggar historik i SQLite och erbjuder lösenordsskyddat webbgränssnitt på port **5063**.
 
@@ -10,13 +10,20 @@ Docker-baserad tjänst som optimerar `.zip`, `.7z` och `.rar`-arkiv, verifierar 
 - Safety net: original flyttas till `/data/.trash`
 - Automatisk rensning av `.trash` enligt retention (standard `24h`)
 - Schemaläggning via cron-uttryck
-- Paus/start/återuppta av kö via webb
-- SQLite-historik med sök + pagination
+- Skydd mot överlappande cron-körningar (ny cron ignoreras om körning redan pågår)
+- Start/paus/återuppta/stopp av kö via webb
+- SQLite-historik med sök + pagination + radera rad + töm historik
+- Summering av totalt sparad datamängd i historikvyn
 - Realtidslogg i webbgränssnittet (SSE)
 - SMTP-notiser vid kritiska fel
+- Inställbart output-format (`same`, `zip`, `7z`, `rar`)
+- `_rezipped`-markering för färdigbehandlade filer (skippas i framtida scanning)
+- Inställbar policy för att behålla nypackad fil (`keep_min_savings_percent`)
+- Mörkt/ljust tema i webbgränssnittet
 - Basic Auth:
   - Antingen via env `AUTH_USER`/`AUTH_PASS`
   - Eller first-run setup på `/setup` (användaren väljer själv)
+- Byte av web UI-lösenord i Settings (endast när auth inte är låst via env)
 
 ## Struktur
 
@@ -50,17 +57,22 @@ Exempel:
 - `DATA_DIR=/data`
 - `CONFIG_DIR=/config`
 - `PORT=5063`
+- `OUTPUT_FORMAT=same`
+- `KEEP_MIN_SAVINGS_PERCENT=0`
+- `THEME=dark`
 - (valfritt) `AUTH_USER=admin`
 - (valfritt) `AUTH_PASS=password123`
 
 ## Webbgränssnitt
 
-- **Live status**: nuvarande fil, köstatus, progressbar
-- **Kontroll**: Starta, Pausa, Återuppta
-- **Historik**: filnamn, originalstorlek, ny storlek, besparing %, ratio, status, tid
+- **Live status**: nuvarande fil, steg/status per tråd, köstatus, progressbar
+- **Kontroll**: Starta, Pausa, Återuppta, Stoppa
+- **Historik**: filnamn, originalstorlek, ny storlek, besparing %, ratio, status, tid, radera rad
+- **Summering**: totalt sparad datamängd
 - **Sök + pagination**
 - **Loggfönster i realtid**
-- **Inställningar**: retention, cron, sortering, SMTP
+- **Inställningar**: retention, cron, sortering, work dir, output-format, savings-tröskel, tema, SMTP
+- **Lösenordsbyte**: byt lösenord för web UI under Settings
 
 ## Sortering av kö
 
@@ -77,3 +89,10 @@ Stödda värden för `scan_sort`:
 - `.rar` (extraktion/test via 7z, ompackning kräver `rar`-binär)
 
 Arkitekturen är fortsatt förberedd för fler format via `SUPPORTED_FORMATS` i `app.py`.
+
+## Keep/discard-policy för nypackad fil
+
+Inställningen `keep_min_savings_percent` styr om nypackad fil ska behållas:
+
+- Om faktisk besparing (%) är **>= tröskel**: nypackad fil behålls.
+- Om faktisk besparing (%) är **< tröskel**: originalinnehåll behålls, men filen döps om till `*_rezipped.<ext>` så den inte processas igen.

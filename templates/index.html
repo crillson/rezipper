@@ -65,6 +65,7 @@
           <button id="startBtn" data-i18n="btn_start">Start</button>
           <button id="pauseBtn" class="warn" data-i18n="btn_pause">Pause</button>
           <button id="resumeBtn" data-i18n="btn_resume">Resume</button>
+          <button id="stopBtn" class="danger" data-i18n="btn_stop">Stop</button>
           <button id="debugScanBtn" type="button" data-i18n="btn_debug_scan">Debug scan</button>
         </div>
       </section>
@@ -76,9 +77,14 @@
 
       <section class="card">
         <h2 data-i18n="history_title">History</h2>
+        <div class="status-row">
+          <strong data-i18n="history_total_savings_label">Total saved:</strong>
+          <span id="historyTotalSavings">-</span>
+        </div>
         <div class="controls">
           <input type="text" id="searchInput" placeholder="Search filename..." data-i18n-placeholder="search_placeholder" />
           <button id="searchBtn" data-i18n="btn_search">Search</button>
+          <button id="clearHistoryBtn" class="danger" data-i18n="btn_clear_history">Clear history</button>
         </div>
         <table>
           <thead>
@@ -90,6 +96,7 @@
               <th data-i18n="th_ratio">Ratio</th>
               <th data-i18n="th_status">Status</th>
               <th data-i18n="th_time">Time</th>
+              <th data-i18n="th_actions">Actions</th>
             </tr>
           </thead>
           <tbody id="historyBody"></tbody>
@@ -146,6 +153,18 @@
               <small data-i18n="output_format_help">Choose archive type to keep or convert to when repacking</small>
             </label>
             <label>
+              <span data-i18n="keep_min_savings_percent_label">Keep repacked file if savings >= (%)</span>
+              <input name="keep_min_savings_percent" id="keepMinSavingsPercent" type="number" min="0" max="100" step="0.1" placeholder="0" />
+              <small data-i18n="keep_min_savings_percent_help">If below threshold, original is kept but renamed with _rezipped</small>
+            </label>
+            <label>
+              <span data-i18n="theme_label">Theme</span>
+              <select name="theme" id="themeSelect">
+                <option value="dark" data-i18n="theme_dark">Dark</option>
+                <option value="light" data-i18n="theme_light">Light</option>
+              </select>
+            </label>
+            <label>
               <span data-i18n="language_label">Language</span>
               <select name="language" id="languageSelect">
                 <option value="en">English</option>
@@ -185,6 +204,24 @@
             <button type="submit" data-i18n="btn_save_settings">Save settings</button>
           </div>
         </form>
+
+        <hr />
+        <h3 data-i18n="change_password_title">Change web UI password</h3>
+        <form id="passwordForm">
+          <div class="grid">
+            <label>
+              <span data-i18n="current_password_label">Current password</span>
+              <input type="password" id="currentPassword" required />
+            </label>
+            <label>
+              <span data-i18n="new_password_label">New password</span>
+              <input type="password" id="newPassword" minlength="6" required />
+            </label>
+          </div>
+          <div class="actions">
+            <button type="submit" data-i18n="btn_change_password">Change password</button>
+          </div>
+        </form>
       </section>
     </section>
 
@@ -199,7 +236,7 @@
     <section id="aboutView" class="view">
       <section class="card">
         <h2 data-i18n="about_title">About</h2>
-        <p data-i18n="about_text">Rezipper v0.7. Archive optimization utility with scheduling, history and diagnostics.</p>
+        <p data-i18n="about_text">Rezipper v0.8. Archive optimization utility with scheduling, history and diagnostics.</p>
       </section>
     </section>
   </main>

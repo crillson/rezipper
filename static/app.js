@@ -17,10 +17,15 @@ const el = {
   threadStatusList: document.getElementById('threadStatusList'),
   progressBar: document.getElementById('progressBar'),
   historyBody: document.getElementById('historyBody'),
+  historyTotalSavings: document.getElementById('historyTotalSavings'),
   pageInfo: document.getElementById('pageInfo'),
   logOutput: document.getElementById('logOutput'),
   searchInput: document.getElementById('searchInput'),
+  clearHistoryBtn: document.getElementById('clearHistoryBtn'),
   settingsForm: document.getElementById('settingsForm'),
+  passwordForm: document.getElementById('passwordForm'),
+  currentPassword: document.getElementById('currentPassword'),
+  newPassword: document.getElementById('newPassword'),
   debugScanOutput: document.getElementById('debugScanOutput'),
   whatsNewVersion: document.getElementById('whatsNewVersion'),
   whatsNewContent: document.getElementById('whatsNewContent'),
@@ -30,9 +35,9 @@ const el = {
   sysUptime: document.getElementById('sysUptime')
 };
 
-async function post(url, body = {}) {
+async function post(url, body = {}, method = 'POST') {
   return fetch(url, {
-    method: 'POST',
+    method,
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body)
   });
@@ -64,7 +69,12 @@ function apiErrorToMessage(data) {
   if (data?.error_code) {
     return t(`error_${data.error_code}`, data.error_code);
   }
-  return data?.error || t('msg_run_start_failed', 'Start failed.');
+  return data?.error || t('msg_generic_error', 'Operation failed.');
+}
+
+function applyTheme(theme) {
+  const next = (theme || 'dark').toLowerCase() === 'light' ? 'light' : 'dark';
+  document.body.setAttribute('data-theme', next);
 }
 
 async function loadLanguage(lang) {
@@ -110,6 +120,11 @@ function showView(viewId) {
   });
 }
 
+function setStatusMessage(msg, isError = false) {
+  el.statusMessage.textContent = msg || '-';
+  el.statusMessage.style.color = isError ? '#cc2b2b' : '';
+}
+
 async function refreshStatus() {
   const r = await fetch('/api/status');
   const s = await r.json();
@@ -132,9 +147,11 @@ async function refreshStatus() {
   }
 }
 
-function setStatusMessage(msg, isError = false) {
-  el.statusMessage.textContent = msg || '-';
-  el.statusMessage.style.color = isError ? '#cc2b2b' : '';
+async function refreshSummary() {
+  const r = await fetch('/api/history/summary');
+  if (!r.ok) return;
+  const data = await r.json();
+  el.historyTotalSavings.textContent = fmtBytes(data.total_savings_bytes || 0);
 }
 
 async function runDebugScan() {
@@ -172,6 +189,18 @@ async function refreshWhatsNew() {
   el.whatsNewContent.textContent = data.content || '';
 }
 
+async function deleteHistoryRow(id) {
+  if (!confirm(t('confirm_delete_history_row', 'Delete this history row?'))) return;
+  const r = await post(`/api/history/${id}`, {}, 'DELETE');
+  const data = await r.json();
+  if (!data.ok) {
+    setStatusMessage(t('error_history_delete_failed', 'Could not delete history row.'), true);
+    return;
+  }
+  setStatusMessage(t('msg_history_row_deleted', 'History row removed.'));
+  await refreshHistory();
+}
+
 async function refreshHistory() {
   const p = new URLSearchParams({
     page: String(state.page),
@@ -196,9 +225,19 @@ async function refreshHistory() {
       <td>${row.ratio.toFixed(2)}</td>
       <td>${row.status}</td>
       <td>${new Date(row.created_at + 'Z').toLocaleString()}</td>
+      <td><button class="danger history-delete-btn" data-id="${row.id}">${t('btn_delete', 'Delete')}</button></td>
     `;
     el.historyBody.appendChild(tr);
   }
+
+  Array.from(document.querySelectorAll('.history-delete-btn')).forEach((btn) => {
+    btn.onclick = async () => {
+      const id = Number(btn.dataset.id || '0');
+      if (id > 0) await deleteHistoryRow(id);
+    };
+  });
+
+  await refreshSummary();
 }
 
 async function loadSettings() {
@@ -213,6 +252,7 @@ async function loadSettings() {
       input.value = v;
     }
   }
+  applyTheme(s.theme || 'dark');
   const language = s.language || 'en';
   el.topLanguageSelect.value = language;
   await loadLanguage(language);
@@ -236,9 +276,36 @@ document.getElementById('startBtn').onclick = async () => {
   }
   await refreshStatus();
 };
-document.getElementById('pauseBtn').onclick = async () => { await post('/api/pause'); };
-document.getElementById('resumeBtn').onclick = async () => { await post('/api/resume'); };
+
+document.getElementById('pauseBtn').onclick = async () => {
+  await post('/api/pause');
+  setStatusMessage(t('msg_run_paused', 'Run paused.'));
+};
+
+document.getElementById('resumeBtn').onclick = async () => {
+  await post('/api/resume');
+  setStatusMessage(t('msg_run_resumed', 'Run resumed.'));
+};
+
+document.getElementById('stopBtn').onclick = async () => {
+  const r = await post('/api/stop');
+  const data = await r.json();
+  if (data.ok) {
+    setStatusMessage(t('msg_stop_requested', 'Stop requested.'));
+  } else {
+    setStatusMessage(t('msg_stop_not_running', 'No run is currently active.'), true);
+  }
+};
+
 document.getElementById('debugScanBtn').onclick = runDebugScan;
+
+el.clearHistoryBtn.onclick = async () => {
+  if (!confirm(t('confirm_clear_history', 'Clear all history?'))) return;
+  await post('/api/history/clear');
+  setStatusMessage(t('msg_history_cleared', 'History cleared.'));
+  state.page = 1;
+  await refreshHistory();
+};
 
 el.navButtons.forEach((btn) => {
   btn.onclick = async () => {
@@ -251,7 +318,7 @@ el.navButtons.forEach((btn) => {
 
 el.topLanguageSelect.onchange = async () => {
   const chosen = el.topLanguageSelect.value;
-  await post('/api/settings', { language: chosen });
+  await post('/api/settings', {language: chosen});
   await loadSettings();
 };
 
@@ -280,11 +347,33 @@ el.settingsForm.onsubmit = async (e) => {
   const fd = new FormData(el.settingsForm);
   const payload = Object.fromEntries(fd.entries());
   payload.debug_logging = document.getElementById('debugLogging').checked ? 'true' : 'false';
-  await post('/api/settings', payload);
+  const r = await post('/api/settings', payload);
+  const data = await r.json();
+  if (!r.ok || !data.ok) {
+    setStatusMessage(apiErrorToMessage(data), true);
+    return;
+  }
+  applyTheme(payload.theme || 'dark');
   setStatusMessage(t('msg_settings_saved', 'Settings saved. Check system log for cron validation.'));
   await loadSettings();
   await runDebugScan();
   await refreshSystemStatus();
+};
+
+el.passwordForm.onsubmit = async (e) => {
+  e.preventDefault();
+  const r = await post('/api/change-password', {
+    current_password: el.currentPassword.value,
+    new_password: el.newPassword.value
+  });
+  const data = await r.json();
+  if (!r.ok || !data.ok) {
+    setStatusMessage(apiErrorToMessage(data), true);
+    return;
+  }
+  el.currentPassword.value = '';
+  el.newPassword.value = '';
+  setStatusMessage(t('msg_password_changed', 'Password changed.'));
 };
 
 async function init() {
