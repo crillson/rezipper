@@ -332,7 +332,13 @@ class RezipperService:
             return source_suffix.lower()
         return f".{configured}"
 
+    def _is_rezipped_name(self, path: Path) -> bool:
+        return path.stem.lower().endswith("_rezipped")
+
     def _is_already_processed(self, path: Path) -> bool:
+        if self._is_rezipped_name(path):
+            return True
+
         target_suffix = self._target_suffix_for(path.suffix.lower())
         if target_suffix != path.suffix.lower():
             # Om användaren vill konvertera format ska filen inte skippas.
@@ -402,31 +408,35 @@ class RezipperService:
         return result
 
     def scan_files(self) -> List[Path]:
-        files, _skipped = self._scan_files_with_stats()
+        files, _skipped_processed, _skipped_rezipped = self._scan_files_with_stats()
         return files
 
-    def _scan_files_with_stats(self) -> tuple[List[Path], int]:
+    def _scan_files_with_stats(self) -> tuple[List[Path], int, int]:
         sort_mode = self.db.get_setting("scan_sort", DEFAULT_SCAN_SORT)
         files: List[Path] = []
         skipped_processed = 0
+        skipped_rezipped = 0
         for p in DATA_DIR.rglob("*"):
             if not p.is_file():
                 continue
             if TRASH_DIR in p.parents:
                 continue
             if p.suffix.lower() in SUPPORTED_FORMATS_SET:
+                if self._is_rezipped_name(p):
+                    skipped_rezipped += 1
+                    continue
                 if self._is_already_processed(p):
                     skipped_processed += 1
                     continue
                 files.append(p)
-        return self._sort_files(files, sort_mode), skipped_processed
+        return self._sort_files(files, sort_mode), skipped_processed, skipped_rezipped
 
     def start(self):
         with self.lock:
             if self.state.running:
                 self.logger.write("INFO", "Körning ignorerad: redan aktiv.")
                 return False
-            files, skipped_processed = self._scan_files_with_stats()
+            files, skipped_processed, skipped_rezipped = self._scan_files_with_stats()
             if not files:
                 self.state = State(
                     running=False,
@@ -461,11 +471,13 @@ class RezipperService:
             self.logger.write("INFO", f"Startar optimering. {len(files)} filer i kö.")
             if skipped_processed:
                 self.logger.write("INFO", f"Skippade {skipped_processed} redan optimerade filer (oförändrade sedan senaste körning).")
+            if skipped_rezipped:
+                self.logger.write("INFO", f"Skippade {skipped_rezipped} filer markerade med _rezipped.")
             self.logger.write("INFO", f"Komprimeringstrådar: {threads_text}")
             return True
 
     def debug_scan(self) -> Dict:
-        files, skipped_processed = self._scan_files_with_stats()
+        files, skipped_processed, skipped_rezipped = self._scan_files_with_stats()
         examples = [str(p.relative_to(DATA_DIR)) for p in files[:25]]
         return {
             "data_dir": str(DATA_DIR),
@@ -477,6 +489,7 @@ class RezipperService:
             "supported_formats": SUPPORTED_FORMATS,
             "found_count": len(files),
             "skipped_processed": skipped_processed,
+            "skipped_rezipped": skipped_rezipped,
             "examples": examples,
             "truncated": len(files) > len(examples),
         }
@@ -488,12 +501,16 @@ class RezipperService:
         self.logger.write("INFO", "Kön pausad via webbgränssnitt.")
 
     def resume(self):
+        should_start = False
         with self.lock:
             if not self.state.running:
-                self.start()
-                return
-            self.state.paused = False
-            self.pause_event.set()
+                should_start = True
+            else:
+                self.state.paused = False
+                self.pause_event.set()
+        if should_start:
+            self.start()
+            return
         self.logger.write("INFO", "Kön återupptagen.")
 
     def status(self) -> Dict:
@@ -550,7 +567,8 @@ class RezipperService:
 
             self._set_stage(path, "replace", "idle")
             new_size = optimized.stat().st_size
-            final_path = path.with_suffix(target_suffix)
+            target_name = f"{path.stem}_rezipped{target_suffix}"
+            final_path = path.with_name(target_name)
             trash_target = self._move_original_to_trash(path)
             extra_trash_target = None
             if final_path.exists() and final_path != path:
