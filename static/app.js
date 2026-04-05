@@ -1,7 +1,9 @@
 const state = {
   page: 1,
   pages: 1,
-  search: ''
+  search: '',
+  lang: 'en',
+  i18n: {}
 };
 
 const el = {
@@ -30,6 +32,51 @@ function fmtBytes(n) {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function t(key, fallback = '') {
+  return state.i18n[key] || fallback || key;
+}
+
+function apiErrorToMessage(data) {
+  if (data?.error_code) {
+    return t(`error_${data.error_code}`, data.error_code);
+  }
+  return data?.error || t('msg_run_start_failed', 'Start failed.');
+}
+
+async function loadLanguage(lang) {
+  const chosen = (lang || 'en').toLowerCase();
+  let next = chosen;
+  try {
+    const r = await fetch(`/static/i18n/${chosen}.json`, {cache: 'no-cache'});
+    if (!r.ok) throw new Error('missing language');
+    state.i18n = await r.json();
+  } catch (_) {
+    next = 'en';
+    const fallback = await fetch('/static/i18n/en.json', {cache: 'no-cache'});
+    state.i18n = await fallback.json();
+  }
+  state.lang = next;
+  applyTranslations();
+}
+
+function applyTranslations() {
+  document.querySelectorAll('[data-i18n]').forEach((node) => {
+    const key = node.dataset.i18n;
+    const value = t(key, node.textContent);
+    node.textContent = value;
+  });
+  document.querySelectorAll('[data-i18n-placeholder]').forEach((node) => {
+    const key = node.dataset.i18nPlaceholder;
+    const value = t(key, node.getAttribute('placeholder') || '');
+    node.setAttribute('placeholder', value);
+  });
+  updatePageInfo();
+}
+
+function updatePageInfo() {
+  el.pageInfo.textContent = `${t('page_label', 'Page')} ${state.page} / ${state.pages}`;
 }
 
 async function refreshStatus() {
@@ -61,7 +108,8 @@ async function refreshHistory() {
   const data = await r.json();
 
   state.pages = data.pages || 1;
-  el.pageInfo.textContent = `Sida ${data.page} / ${data.pages}`;
+  state.page = data.page || state.page;
+  updatePageInfo();
   el.historyBody.innerHTML = '';
 
   for (const row of data.items) {
@@ -84,8 +132,15 @@ async function loadSettings() {
   const s = await r.json();
   for (const [k, v] of Object.entries(s)) {
     const input = el.settingsForm.querySelector(`[name="${k}"]`);
-    if (input) input.value = v;
+    if (!input) continue;
+    if (input.type === 'checkbox') {
+      input.checked = ['1', 'true', 'yes', 'on'].includes(String(v).toLowerCase());
+    } else {
+      input.value = v;
+    }
   }
+  const language = s.language || 'en';
+  await loadLanguage(language);
 }
 
 function connectLogs() {
@@ -100,9 +155,9 @@ document.getElementById('startBtn').onclick = async () => {
   const r = await post('/api/start');
   const data = await r.json();
   if (data.ok) {
-    setStatusMessage('Körning startad.');
+    setStatusMessage(t('msg_run_started', 'Run started.'));
   } else {
-    setStatusMessage(data.error || 'Start misslyckades.', true);
+    setStatusMessage(apiErrorToMessage(data), true);
   }
   await refreshStatus();
 };
@@ -134,13 +189,15 @@ el.settingsForm.onsubmit = async (e) => {
   e.preventDefault();
   const fd = new FormData(el.settingsForm);
   const payload = Object.fromEntries(fd.entries());
+  payload.debug_logging = document.getElementById('debugLogging').checked ? 'true' : 'false';
   await post('/api/settings', payload);
-  setStatusMessage('Inställningar sparade. Kontrollera systemloggen för cron-validering.');
+  setStatusMessage(t('msg_settings_saved', 'Settings saved. Check system log for cron validation.'));
   await loadSettings();
 };
 
 async function init() {
-  await Promise.all([refreshStatus(), refreshHistory(), loadSettings()]);
+  await loadSettings();
+  await Promise.all([refreshStatus(), refreshHistory()]);
   await runDebugScan();
   connectLogs();
   setInterval(refreshStatus, 1500);

@@ -1,96 +1,107 @@
 <!doctype html>
-<html lang="sv">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Rezipper Dashboard</title>
+  <title data-i18n="page_title">Rezipper Dashboard</title>
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
   <header>
-    <h1>Rezipper</h1>
-    <p>Kontrollpanel för arkivoptimering</p>
+    <h1 data-i18n="header_title">Rezipper</h1>
+    <p data-i18n="header_subtitle">Archive optimization control panel</p>
   </header>
 
   <main>
     <section class="card">
-      <h2>Live status</h2>
+      <h2 data-i18n="live_status">Live status</h2>
       <div class="status-row">
-        <strong>Meddelande:</strong>
+        <strong data-i18n="message_label">Message:</strong>
         <span id="statusMessage">-</span>
       </div>
       <div class="status-row">
-        <strong>Nuvarande fil:</strong>
+        <strong data-i18n="current_file_label">Current file:</strong>
         <span id="currentFile">-</span>
       </div>
       <div class="status-row">
-        <strong>Kö:</strong>
+        <strong data-i18n="queue_label">Queue:</strong>
         <span id="queueStats">0 / 0</span>
       </div>
       <div class="progress-wrap">
         <div class="progress-bar" id="progressBar"></div>
       </div>
       <div class="actions">
-        <button id="startBtn">Starta</button>
-        <button id="pauseBtn" class="warn">Pausa</button>
-        <button id="resumeBtn">Återuppta</button>
-        <button id="debugScanBtn" type="button">Debug scan</button>
+        <button id="startBtn" data-i18n="btn_start">Start</button>
+        <button id="pauseBtn" class="warn" data-i18n="btn_pause">Pause</button>
+        <button id="resumeBtn" data-i18n="btn_resume">Resume</button>
+        <button id="debugScanBtn" type="button" data-i18n="btn_debug_scan">Debug scan</button>
       </div>
     </section>
 
     <section class="card">
-      <h2>Debug scan</h2>
+      <h2 data-i18n="debug_scan_title">Debug scan</h2>
       <pre id="debugScanOutput" class="log"></pre>
     </section>
 
     <section class="card">
-      <h2>Total historik</h2>
+      <h2 data-i18n="history_title">History</h2>
       <div class="controls">
-        <input type="text" id="searchInput" placeholder="Sök filnamn..." />
-        <button id="searchBtn">Sök</button>
+        <input type="text" id="searchInput" placeholder="Search filename..." data-i18n-placeholder="search_placeholder" />
+        <button id="searchBtn" data-i18n="btn_search">Search</button>
       </div>
       <table>
         <thead>
           <tr>
-            <th>Filnamn</th>
-            <th>Originalstorlek</th>
-            <th>Ny storlek</th>
-            <th>Besparing (%)</th>
-            <th>Ratio</th>
-            <th>Status</th>
-            <th>Tid</th>
+            <th data-i18n="th_filename">Filename</th>
+            <th data-i18n="th_original_size">Original size</th>
+            <th data-i18n="th_new_size">New size</th>
+            <th data-i18n="th_savings">Savings (%)</th>
+            <th data-i18n="th_ratio">Ratio</th>
+            <th data-i18n="th_status">Status</th>
+            <th data-i18n="th_time">Time</th>
           </tr>
         </thead>
         <tbody id="historyBody"></tbody>
       </table>
       <div class="pagination">
-        <button id="prevPage">Föregående</button>
-        <span id="pageInfo">Sida 1 / 1</span>
-        <button id="nextPage">Nästa</button>
+        <button id="prevPage" data-i18n="btn_prev">Previous</button>
+        <span id="pageInfo">Page 1 / 1</span>
+        <button id="nextPage" data-i18n="btn_next">Next</button>
       </div>
     </section>
 
     <section class="card">
-      <h2>Systemlogg (realtid)</h2>
+      <h2 data-i18n="system_log_title">System log (realtime)</h2>
       <pre id="logOutput" class="log"></pre>
     </section>
 
     <section class="card">
-      <h2>Inställningar</h2>
+      <h2 data-i18n="settings_title">Settings</h2>
       <form id="settingsForm">
         <div class="grid">
           <label>
-            Papperskorg retention
+            <span data-i18n="trash_retention_label">Trash retention</span>
             <input name="trash_retention" placeholder="24h" />
           </label>
           <label>
-            Cron schema
+            <span data-i18n="cron_label">Cron schedule</span>
             <input name="cron_schedule" placeholder="0 0 * * *" />
-            <small>Stöd: 5-fälts crontab eller 6/7-fälts (Quartz-liknande)</small>
+            <small data-i18n="cron_help">Supports 5-field crontab and 6/7-field Quartz-like expressions</small>
           </label>
           <label>
-            Sortering (name/size/date)
+            <span data-i18n="scan_sort_label">Sorting (name/size/date)</span>
             <input name="scan_sort" placeholder="name" />
+          </label>
+          <label>
+            <span data-i18n="language_label">Language</span>
+            <select name="language" id="languageSelect">
+              <option value="en">English</option>
+              <option value="sv">Svenska</option>
+            </select>
+          </label>
+          <label>
+            <span data-i18n="debug_logging_label">Verbose debug logging</span>
+            <input name="debug_logging" id="debugLogging" type="checkbox" />
           </label>
           <label>
             SMTP host
@@ -118,7 +129,7 @@
           </label>
         </div>
         <div class="actions">
-          <button type="submit">Spara inställningar</button>
+          <button type="submit" data-i18n="btn_save_settings">Save settings</button>
         </div>
       </form>
     </section>

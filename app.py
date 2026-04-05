@@ -33,6 +33,7 @@ AUTH_PATH = CONFIG_DIR / "auth.json"
 DEFAULT_TRASH_RETENTION = os.environ.get("TRASH_RETENTION", "24h")
 DEFAULT_CRON = os.environ.get("CRON_SCHEDULE", "0 0 * * *")
 DEFAULT_SCAN_SORT = "name"
+ALLOWED_LANGUAGES = {"en", "sv"}
 SUPPORTED_FORMATS = [".zip", ".7z", ".rar"]
 SUPPORTED_FORMATS_SET = set(SUPPORTED_FORMATS)
 
@@ -60,6 +61,12 @@ def duration_hours_to_string(hours: float) -> str:
 
 def now_iso() -> str:
     return datetime.utcnow().isoformat(timespec="seconds")
+
+
+def parse_bool(value: Optional[str], default: bool = False) -> bool:
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 class Database:
@@ -254,6 +261,24 @@ class RezipperService:
             return sorted(files, key=lambda p: p.stat().st_mtime)
         return sorted(files, key=lambda p: p.name.lower())
 
+    def _debug_enabled(self) -> bool:
+        return parse_bool(self.db.get_setting("debug_logging", "false"), default=False)
+
+    def _debug_log(self, message: str):
+        if self._debug_enabled():
+            self.logger.write("DEBUG", message)
+
+    def _run_command(self, cmd: List[str], cwd: Optional[Path] = None) -> subprocess.CompletedProcess:
+        cwd_str = str(cwd) if cwd else None
+        self._debug_log(f"Kör kommando: {' '.join(cmd)} (cwd={cwd_str or '<none>'})")
+        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+
+        self._debug_log(
+            f"Kommando klart (rc={result.returncode}): {' '.join(cmd)}"
+            + (f" | stderr: {result.stderr.strip()[:400]}" if result.stderr else "")
+        )
+        return result
+
     def scan_files(self) -> List[Path]:
         sort_mode = self.db.get_setting("scan_sort", DEFAULT_SCAN_SORT)
         files: List[Path] = []
@@ -340,6 +365,7 @@ class RezipperService:
             self.pause_event.wait()
             with self.lock:
                 self.state.current_file = str(file.relative_to(DATA_DIR))
+            self.logger.write("INFO", f"Bearbetar: {file.relative_to(DATA_DIR)}")
             self._process_single(file)
             with self.lock:
                 self.state.processed_files += 1
@@ -358,6 +384,7 @@ class RezipperService:
         try:
             with tempfile.TemporaryDirectory(prefix="rezipper_") as tmp:
                 optimized = Path(tmp) / f"optimized{path.suffix.lower()}"
+                self._debug_log(f"Tempfil för optimering: {optimized}")
                 self._recompress(path, optimized)
                 self._crc_test(optimized)
 
@@ -406,6 +433,7 @@ class RezipperService:
 
     def _recompress(self, source: Path, target: Path):
         archive_type = source.suffix.lower()
+        self._debug_log(f"Startar recompress för {source} ({archive_type})")
 
         # ZIP kan hanteras utan externa binärer som fallback.
         if archive_type == ".zip" and not shutil.which("7z"):
@@ -427,14 +455,14 @@ class RezipperService:
         with tempfile.TemporaryDirectory(prefix="rezipper_extract_") as tmp_extract:
             extract_dir = Path(tmp_extract)
             extract_cmd = ["7z", "x", "-y", f"-o{extract_dir}", str(source)]
-            r = subprocess.run(extract_cmd, capture_output=True, text=True)
+            r = self._run_command(extract_cmd)
             if r.returncode != 0:
                 raise RuntimeError(f"7z extract misslyckades: {r.stderr or r.stdout}")
 
             if archive_type in {".zip", ".7z"}:
                 target_type = "zip" if archive_type == ".zip" else "7z"
                 add_cmd = ["7z", "a", f"-t{target_type}", "-mx=9", str(target), "."]
-                r = subprocess.run(add_cmd, cwd=extract_dir, capture_output=True, text=True)
+                r = self._run_command(add_cmd, cwd=extract_dir)
                 if r.returncode != 0:
                     raise RuntimeError(
                         f"7z komprimering misslyckades för {archive_type}: {r.stderr or r.stdout}"
@@ -448,7 +476,7 @@ class RezipperService:
                     )
 
                 add_cmd = ["rar", "a", "-idq", "-m5", str(target), "."]
-                r = subprocess.run(add_cmd, cwd=extract_dir, capture_output=True, text=True)
+                r = self._run_command(add_cmd, cwd=extract_dir)
                 if r.returncode != 0:
                     raise RuntimeError(
                         f"RAR-komprimering misslyckades: {r.stderr or r.stdout}"
@@ -459,7 +487,7 @@ class RezipperService:
 
     def _crc_test(self, path: Path):
         if shutil.which("7z"):
-            r = subprocess.run(["7z", "t", str(path)], capture_output=True, text=True)
+            r = self._run_command(["7z", "t", str(path)])
             if r.returncode != 0:
                 raise RuntimeError(f"CRC-test misslyckades: {r.stderr or r.stdout}")
             return
@@ -509,6 +537,10 @@ def init_defaults():
         db.set_setting("cron_schedule", DEFAULT_CRON)
     if db.get_setting("scan_sort") is None:
         db.set_setting("scan_sort", DEFAULT_SCAN_SORT)
+    if db.get_setting("debug_logging") is None:
+        db.set_setting("debug_logging", "false")
+    if db.get_setting("language") is None:
+        db.set_setting("language", "en")
 
     for key in [
         "smtp_host",
@@ -655,7 +687,7 @@ def api_start():
         return jsonify(
             {
                 "ok": False,
-                "error": "Inga filer hittades att optimera i /data (.zip/.7z/.rar).",
+                "error_code": "no_files_found",
             }
         )
     return jsonify({"ok": started})
@@ -687,6 +719,10 @@ def api_get_settings():
     settings.setdefault("trash_retention", DEFAULT_TRASH_RETENTION)
     settings.setdefault("cron_schedule", DEFAULT_CRON)
     settings.setdefault("scan_sort", DEFAULT_SCAN_SORT)
+    settings.setdefault("debug_logging", "false")
+    settings.setdefault("language", "en")
+    if settings.get("language") not in ALLOWED_LANGUAGES:
+        settings["language"] = "en"
     return jsonify(settings)
 
 
@@ -697,6 +733,8 @@ def api_set_settings():
         "trash_retention",
         "cron_schedule",
         "scan_sort",
+        "debug_logging",
+        "language",
         "smtp_host",
         "smtp_port",
         "smtp_user",
@@ -706,6 +744,13 @@ def api_set_settings():
     }
     for k, v in data.items():
         if k in allowed:
+            if k == "language":
+                lang = str(v).strip().lower()
+                db.set_setting("language", lang if lang in ALLOWED_LANGUAGES else "en")
+                continue
+            if k == "debug_logging":
+                db.set_setting("debug_logging", "true" if parse_bool(str(v)) else "false")
+                continue
             db.set_setting(k, str(v))
 
     configure_scheduler()
