@@ -29,6 +29,8 @@ Docker-baserad tjänst som optimerar `.zip`, `.7z` och `.rar`-arkiv, verifierar 
 docker compose up --build -d
 ```
 
+> Docker-imagen installerar nu även `rar`/`unrar` (från RARLAB) så att `.rar` kan ompackas i containern.
+
 Öppna:
 
 - `http://localhost:5063`

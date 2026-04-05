@@ -9,7 +9,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends p7zip-full \
+    && apt-get install -y --no-install-recommends p7zip-full wget ca-certificates tar \
+    && wget -qO /tmp/rarlinux.tar.gz https://www.rarlab.com/rar/rarlinux-x64-701.tar.gz \
+    && tar -xzf /tmp/rarlinux.tar.gz -C /tmp \
+    && install -m 0755 /tmp/rar/rar /usr/local/bin/rar \
+    && install -m 0755 /tmp/rar/unrar /usr/local/bin/unrar \
+    && rm -rf /tmp/rar /tmp/rarlinux.tar.gz \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /app/requirements.txt
