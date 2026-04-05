@@ -46,7 +46,7 @@
   "whats_new_title": "What's new",
   "version_label": "Version:",
   "about_title": "Om",
-  "about_text": "Rezipper v0.8. Verktyg för arkivoptimering med schema, historik och diagnostik.",
+  "about_text": "Rezipper v0.81. Verktyg för arkivoptimering med schema, historik och diagnostik. By Crillson (2026).",
   "trash_retention_label": "Papperskorgs-retention",
   "cron_label": "Cron-schema",
   "cron_help": "Stödjer 5-fälts crontab och 6/7-fälts Quartz-liknande uttryck",

@@ -1272,12 +1272,28 @@ def get_uptime_seconds() -> Optional[float]:
 
 
 def read_whats_new() -> str:
-    try:
-        if WHATS_NEW_PATH.exists():
-            return WHATS_NEW_PATH.read_text(encoding="utf-8")
-    except Exception:
-        pass
-    return "# v0.8\n\nNo release notes available."
+    candidates = [
+        WHATS_NEW_PATH,
+        Path(__file__).resolve().parent / "WHATS_NEW.md",
+        Path.cwd() / "WHATS_NEW.md",
+    ]
+    for candidate in candidates:
+        try:
+            if candidate.exists():
+                return candidate.read_text(encoding="utf-8")
+        except Exception:
+            continue
+    return "# v0.81\n\nNo release notes available."
+
+
+def extract_whats_new_version(content: str) -> str:
+    for raw_line in (content or "").splitlines():
+        line = raw_line.strip()
+        if line.startswith("#"):
+            heading = line.lstrip("#").strip()
+            if heading:
+                return heading
+    return "v0.81"
 
 
 @app.get("/api/system-status")
@@ -1302,7 +1318,8 @@ def api_system_status():
 
 @app.get("/api/whats-new")
 def api_whats_new():
-    return jsonify({"version": "v0.8", "content": read_whats_new()})
+    content = read_whats_new()
+    return jsonify({"version": extract_whats_new_version(content), "content": content})
 
 
 def cron_trigger_from_expression(expr: str) -> CronTrigger:

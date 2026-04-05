@@ -46,7 +46,7 @@
   "whats_new_title": "What's new",
   "version_label": "Version:",
   "about_title": "About",
-  "about_text": "Rezipper v0.8. Archive optimization utility with scheduling, history and diagnostics.",
+  "about_text": "Rezipper v0.81. Archive optimization utility with scheduling, history and diagnostics. By Crillson (2026).",
   "trash_retention_label": "Trash retention",
   "cron_label": "Cron schedule",
   "cron_help": "Supports 5-field crontab and 6/7-field Quartz-like expressions",
