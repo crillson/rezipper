@@ -33,6 +33,7 @@ AUTH_PATH = CONFIG_DIR / "auth.json"
 DEFAULT_TRASH_RETENTION = os.environ.get("TRASH_RETENTION", "24h")
 DEFAULT_CRON = os.environ.get("CRON_SCHEDULE", "0 0 * * *")
 DEFAULT_SCAN_SORT = "name"
+DEFAULT_WORK_DIR = os.environ.get("WORK_DIR", "/jobs")
 ALLOWED_LANGUAGES = {"en", "sv"}
 SUPPORTED_FORMATS = [".zip", ".7z", ".rar"]
 SUPPORTED_FORMATS_SET = set(SUPPORTED_FORMATS)
@@ -261,6 +262,22 @@ class RezipperService:
             return sorted(files, key=lambda p: p.stat().st_mtime)
         return sorted(files, key=lambda p: p.name.lower())
 
+    def _get_work_root(self) -> Path:
+        configured = (self.db.get_setting("work_dir", DEFAULT_WORK_DIR) or DEFAULT_WORK_DIR).strip()
+        if not configured:
+            configured = DEFAULT_WORK_DIR
+        root = Path(configured)
+        if not root.is_absolute():
+            root = (DATA_DIR / root).resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    def _build_work_dir(self, source: Path) -> Path:
+        rel = source.relative_to(DATA_DIR)
+        safe_name = rel.as_posix().replace("/", "__")
+        stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+        return self._get_work_root() / f"{safe_name}__{stamp}"
+
     def _debug_enabled(self) -> bool:
         return parse_bool(self.db.get_setting("debug_logging", "false"), default=False)
 
@@ -331,6 +348,7 @@ class RezipperService:
         return {
             "data_dir": str(DATA_DIR),
             "trash_dir": str(TRASH_DIR),
+            "work_dir": str(self._get_work_root()),
             "scan_sort": self.db.get_setting("scan_sort", DEFAULT_SCAN_SORT),
             "supported_formats": SUPPORTED_FORMATS,
             "found_count": len(files),
@@ -381,38 +399,41 @@ class RezipperService:
         start = time.time()
         original_size = path.stat().st_size
         rel_name = str(path.relative_to(DATA_DIR))
+        work_dir: Optional[Path] = None
         try:
-            with tempfile.TemporaryDirectory(prefix="rezipper_") as tmp:
-                optimized = Path(tmp) / f"optimized{path.suffix.lower()}"
-                self._debug_log(f"Tempfil för optimering: {optimized}")
-                self._recompress(path, optimized)
-                self._crc_test(optimized)
+            work_dir = self._build_work_dir(path)
+            work_dir.mkdir(parents=True, exist_ok=True)
+            self._debug_log(f"Arbetsmapp: {work_dir}")
+            optimized = work_dir / f"optimized{path.suffix.lower()}"
+            self._debug_log(f"Tempfil för optimering: {optimized}")
+            self._recompress(path, optimized, work_dir)
+            self._crc_test(optimized)
 
-                new_size = optimized.stat().st_size
-                trash_target = self._move_original_to_trash(path)
-                shutil.move(str(optimized), str(path))
+            new_size = optimized.stat().st_size
+            trash_target = self._move_original_to_trash(path)
+            shutil.move(str(optimized), str(path))
 
-                savings = original_size - new_size
-                savings_percent = (savings / original_size * 100.0) if original_size else 0.0
-                ratio = (original_size / new_size * 100.0) if new_size else 0.0
-                self.db.insert_job(
-                    {
-                        "filename": rel_name,
-                        "original_size": original_size,
-                        "new_size": new_size,
-                        "savings_bytes": savings,
-                        "savings_percent": round(savings_percent, 2),
-                        "ratio": round(ratio, 2),
-                        "duration_ms": int((time.time() - start) * 1000),
-                        "status": "SUCCESS",
-                        "error_message": None,
-                        "created_at": now_iso(),
-                    }
-                )
-                self.logger.write(
-                    "INFO",
-                    f"Klar: {rel_name} ({original_size} -> {new_size} bytes, trash: {trash_target.name})",
-                )
+            savings = original_size - new_size
+            savings_percent = (savings / original_size * 100.0) if original_size else 0.0
+            ratio = (original_size / new_size * 100.0) if new_size else 0.0
+            self.db.insert_job(
+                {
+                    "filename": rel_name,
+                    "original_size": original_size,
+                    "new_size": new_size,
+                    "savings_bytes": savings,
+                    "savings_percent": round(savings_percent, 2),
+                    "ratio": round(ratio, 2),
+                    "duration_ms": int((time.time() - start) * 1000),
+                    "status": "SUCCESS",
+                    "error_message": None,
+                    "created_at": now_iso(),
+                }
+            )
+            self.logger.write(
+                "INFO",
+                f"Klar: {rel_name} ({original_size} -> {new_size} bytes, trash: {trash_target.name})",
+            )
         except Exception as exc:
             self.db.insert_job(
                 {
@@ -430,8 +451,11 @@ class RezipperService:
             )
             self.logger.write("ERROR", f"Fel vid {rel_name}: {exc}")
             send_critical_email(f"CRC/optimeringsfel för {rel_name}", str(exc))
+        finally:
+            if work_dir and work_dir.exists():
+                shutil.rmtree(work_dir, ignore_errors=True)
 
-    def _recompress(self, source: Path, target: Path):
+    def _recompress(self, source: Path, target: Path, work_dir: Path):
         archive_type = source.suffix.lower()
         self._debug_log(f"Startar recompress för {source} ({archive_type})")
 
@@ -452,38 +476,38 @@ class RezipperService:
         if not shutil.which("7z"):
             raise RuntimeError("7z krävs för att optimera detta format.")
 
-        with tempfile.TemporaryDirectory(prefix="rezipper_extract_") as tmp_extract:
-            extract_dir = Path(tmp_extract)
-            extract_cmd = ["7z", "x", "-y", f"-o{extract_dir}", str(source)]
-            r = self._run_command(extract_cmd)
+        extract_dir = work_dir / "extract"
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        extract_cmd = ["7z", "x", "-y", f"-o{extract_dir}", str(source)]
+        r = self._run_command(extract_cmd)
+        if r.returncode != 0:
+            raise RuntimeError(f"7z extract misslyckades: {r.stderr or r.stdout}")
+
+        if archive_type in {".zip", ".7z"}:
+            target_type = "zip" if archive_type == ".zip" else "7z"
+            add_cmd = ["7z", "a", f"-t{target_type}", "-mx=9", str(target), "."]
+            r = self._run_command(add_cmd, cwd=extract_dir)
             if r.returncode != 0:
-                raise RuntimeError(f"7z extract misslyckades: {r.stderr or r.stdout}")
+                raise RuntimeError(
+                    f"7z komprimering misslyckades för {archive_type}: {r.stderr or r.stdout}"
+                )
+            return
 
-            if archive_type in {".zip", ".7z"}:
-                target_type = "zip" if archive_type == ".zip" else "7z"
-                add_cmd = ["7z", "a", f"-t{target_type}", "-mx=9", str(target), "."]
-                r = self._run_command(add_cmd, cwd=extract_dir)
-                if r.returncode != 0:
-                    raise RuntimeError(
-                        f"7z komprimering misslyckades för {archive_type}: {r.stderr or r.stdout}"
-                    )
-                return
+        if archive_type == ".rar":
+            if not shutil.which("rar"):
+                raise RuntimeError(
+                    "RAR-optimering kräver 'rar'-binär för ompackning (7z kan normalt inte skapa RAR)."
+                )
 
-            if archive_type == ".rar":
-                if not shutil.which("rar"):
-                    raise RuntimeError(
-                        "RAR-optimering kräver 'rar'-binär för ompackning (7z kan normalt inte skapa RAR)."
-                    )
+            add_cmd = ["rar", "a", "-idq", "-m5", str(target), "."]
+            r = self._run_command(add_cmd, cwd=extract_dir)
+            if r.returncode != 0:
+                raise RuntimeError(
+                    f"RAR-komprimering misslyckades: {r.stderr or r.stdout}"
+                )
+            return
 
-                add_cmd = ["rar", "a", "-idq", "-m5", str(target), "."]
-                r = self._run_command(add_cmd, cwd=extract_dir)
-                if r.returncode != 0:
-                    raise RuntimeError(
-                        f"RAR-komprimering misslyckades: {r.stderr or r.stdout}"
-                    )
-                return
-
-            raise RuntimeError(f"Format stöds inte: {archive_type}")
+        raise RuntimeError(f"Format stöds inte: {archive_type}")
 
     def _crc_test(self, path: Path):
         if shutil.which("7z"):
@@ -537,6 +561,8 @@ def init_defaults():
         db.set_setting("cron_schedule", DEFAULT_CRON)
     if db.get_setting("scan_sort") is None:
         db.set_setting("scan_sort", DEFAULT_SCAN_SORT)
+    if db.get_setting("work_dir") is None:
+        db.set_setting("work_dir", DEFAULT_WORK_DIR)
     if db.get_setting("debug_logging") is None:
         db.set_setting("debug_logging", "false")
     if db.get_setting("language") is None:
@@ -719,6 +745,7 @@ def api_get_settings():
     settings.setdefault("trash_retention", DEFAULT_TRASH_RETENTION)
     settings.setdefault("cron_schedule", DEFAULT_CRON)
     settings.setdefault("scan_sort", DEFAULT_SCAN_SORT)
+    settings.setdefault("work_dir", DEFAULT_WORK_DIR)
     settings.setdefault("debug_logging", "false")
     settings.setdefault("language", "en")
     if settings.get("language") not in ALLOWED_LANGUAGES:
@@ -733,6 +760,7 @@ def api_set_settings():
         "trash_retention",
         "cron_schedule",
         "scan_sort",
+        "work_dir",
         "debug_logging",
         "language",
         "smtp_host",
@@ -747,6 +775,10 @@ def api_set_settings():
             if k == "language":
                 lang = str(v).strip().lower()
                 db.set_setting("language", lang if lang in ALLOWED_LANGUAGES else "en")
+                continue
+            if k == "work_dir":
+                work_dir = str(v).strip() or DEFAULT_WORK_DIR
+                db.set_setting("work_dir", work_dir)
                 continue
             if k == "debug_logging":
                 db.set_setting("debug_logging", "true" if parse_bool(str(v)) else "false")

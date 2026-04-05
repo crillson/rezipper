@@ -29,6 +29,8 @@
   "cron_label": "Cron schedule",
   "cron_help": "Supports 5-field crontab and 6/7-field Quartz-like expressions",
   "scan_sort_label": "Sorting (name/size/date)",
+  "work_dir_label": "Work directory",
+  "work_dir_help": "Directory for extract/repack workspace (can be outside /data)",
   "language_label": "Language",
   "debug_logging_label": "Verbose debug logging",
   "btn_save_settings": "Save settings",

@@ -29,6 +29,8 @@
   "cron_label": "Cron-schema",
   "cron_help": "Stödjer 5-fälts crontab och 6/7-fälts Quartz-liknande uttryck",
   "scan_sort_label": "Sortering (name/size/date)",
+  "work_dir_label": "Arbetskatalog",
+  "work_dir_help": "Katalog för uppackning/ompackning (kan ligga utanför /data)",
   "language_label": "Språk",
   "debug_logging_label": "Utförlig debug-loggning",
   "btn_save_settings": "Spara inställningar",
